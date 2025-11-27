@@ -7,3 +7,4 @@ langchain-google-genai==2.0.0
 langchain-chroma
 chromadb
 lark
+langchain-huggingface

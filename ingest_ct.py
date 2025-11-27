@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # We use Local Embeddings (HuggingFace) to avoid Google API Rate Limits
-from langchain_community.embeddings import HuggingFaceEmbeddings 
+from langchain_huggingface import HuggingFaceEmbeddings 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 

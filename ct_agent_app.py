@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 # LangChain Imports
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.embeddings import HuggingFaceEmbeddings 
+from langchain_huggingface import HuggingFaceEmbeddings 
 from langchain_chroma import Chroma
 from langchain.chains.query_constructor.schema import AttributeInfo
 from langchain.retrievers.self_query.base import SelfQueryRetriever
@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 load_dotenv()
 
 st.set_page_config(page_title="Clinical Trial Inspector", layout="wide")
-st.title("CT Inspector Agent")
+st.title("🧬 Clinical Trial Inspector Agent")
 
 # 1. Setup LLM (Gemini) & Embeddings (Local)
 if not os.getenv("GOOGLE_API_KEY"):
@@ -42,6 +42,8 @@ metadata_field_info = [
     AttributeInfo(name="year", description="The year the study started (Integer).", type="integer"),
     AttributeInfo(name="phase", description="The phase (String): PHASE1, PHASE2, PHASE3, PHASE4, NA.", type="string"),
     AttributeInfo(name="sponsor", description="The sponsor organization (String).", type="string"),
+    AttributeInfo(name="title", description="The title of the study (String).", type="string"),
+    AttributeInfo(name="nct_id", description="The NCT ID of the study (String).", type="string"),
 ]
 document_content_description = "Clinical trial eligibility criteria"
 
