@@ -3,6 +3,9 @@ import streamlit as st
 import pandas as pd
 import os
 import altair as alt
+
+__version__ = "1.0.0"
+
 import logging
 logging.getLogger("langchain_google_genai._function_utils").setLevel(logging.ERROR)
 from dotenv import load_dotenv
@@ -502,12 +505,16 @@ if prompt := st.chat_input("Ask about clinical trials..."):
                 if chart_data:
                     msg_obj["chart_data"] = chart_data
                 st.session_state.messages.append(msg_obj)
-                
+        
             except Exception as e:
                 st.error(f"An error occurred: {e}")
 
 # 6. Analytics & Export (On-Demand)
-with st.expander("📊 Analytics & Export", expanded=False):
+with st.sidebar:
+    st.header("📊 Analytics & Export")
+    st.caption(f"v{__version__}")
+    
+    # --- Analytics Scope ---
     st.write("Analyze trends in the clinical trial data.")
     
     # Simplified: Always Overall Dataset
