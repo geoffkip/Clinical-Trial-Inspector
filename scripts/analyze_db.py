@@ -14,6 +14,7 @@ Usage:
     # OR
     cd scripts && python analyze_db.py
 """
+
 import chromadb
 import pandas as pd
 import os
@@ -27,7 +28,7 @@ def analyze_db():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     db_path = os.path.join(project_root, "ct_gov_index")
-    
+
     if not os.path.exists(db_path):
         print(f"❌ Database directory '{db_path}' does not exist.")
         print("   Please run 'python scripts/ingest_ct.py' first to ingest data.")
@@ -36,7 +37,7 @@ def analyze_db():
     print(f"📂 Loading database from {db_path}...")
     try:
         client = chromadb.PersistentClient(path=db_path)
-        
+
         # Check for collection existence
         collections = client.list_collections()
         # Handle different ChromaDB versions for list_collections output
@@ -51,15 +52,21 @@ def analyze_db():
         print(f"✅ Found 'clinical_trials' collection with {count} documents.")
 
         # Fetch all metadata for analysis
-        # Note: For very large datasets (>100k), this might be slow and require batching.
-        # But for typical local use (<50k), fetching metadata only is fast enough.
         data = collection.get(include=["metadatas"])
-
+        
         if not data["metadatas"]:
             print("❌ No metadata found.")
             return
 
         df = pd.DataFrame(data["metadatas"])
+
+        if "nct_id" in df.columns:
+            unique_ncts = df["nct_id"].nunique()
+            print(f"🔢 Unique NCT IDs: {unique_ncts}")
+            if unique_ncts < count:
+                print(f"⚠️ Warning: {count - unique_ncts} duplicate records found!")
+        else:
+            print("⚠️ 'nct_id' field not found in metadata.")
 
         # --- Analysis Sections ---
 
@@ -91,6 +98,22 @@ def analyze_db():
         else:
             print("⚠️ 'condition' field not found in metadata.")
 
+        print("\n📊 --- Top Interventions ---")
+        if "intervention" in df.columns:
+            # Interventions are semicolon-separated strings (from ingest_ct.py), so we split by "; "
+            all_interventions = []
+            for interventions in df["intervention"].dropna():
+                # Split by semicolon and strip whitespace
+                parts = [i.strip() for i in interventions.split(";") if i.strip()]
+                all_interventions.extend(parts)
+            
+            if all_interventions:
+                print(pd.Series(all_interventions).value_counts().head(20))
+            else:
+                print("No interventions found.")
+        else:
+            print("⚠️ 'intervention' field not found in metadata.")
+
         print("\n📝 --- Sample Studies (Most Recent Start Years) ---")
         if "start_year" in df.columns and "title" in df.columns:
             # Ensure start_year is numeric for sorting
@@ -101,6 +124,16 @@ def analyze_db():
                     f"- [{row.get('start_year', 'N/A')}] {row.get('title', 'N/A')} ({row.get('nct_id', 'N/A')})"
                 )
                 print(f"  Sponsor: {row.get('org', 'N/A')}")
+                print(f"  Intervention: {row.get('intervention', 'N/A')}")
+
+        print("\n📊 --- Intervention Check ---")
+        if "intervention" in df.columns:
+            non_empty = df[df["intervention"].str.len() > 0]
+            print(f"Total records with interventions: {len(non_empty)}")
+            if not non_empty.empty:
+                print("Sample Intervention:", non_empty.iloc[0]["intervention"])
+        else:
+            print("⚠️ 'intervention' field not found.")
 
     except Exception as e:
         print(f"⚠️ Error analyzing DB: {e}")

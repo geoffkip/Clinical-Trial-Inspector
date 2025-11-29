@@ -7,6 +7,7 @@ Tools include:
 2.  **find_similar_studies**: Finding studies semantically similar to a given text.
 3.  **get_study_analytics**: Aggregating data for trends and insights (with inline charts).
 """
+
 import pandas as pd
 import streamlit as st
 from typing import Optional
@@ -16,11 +17,52 @@ from llama_index.core.vector_stores import (
     MetadataFilters,
     FilterOperator,
 )
+from llama_index.core import Settings
 from llama_index.core.postprocessor import SentenceTransformerRerank
-from modules.utils import load_index, normalize_sponsor, LocalMetadataPostFilter
+from llama_index.core.query_engine import SubQuestionQueryEngine
+from llama_index.core.tools import QueryEngineTool, ToolMetadata
+from modules.utils import (
+    load_index,
+    normalize_sponsor,
+    LocalMetadataPostFilter,
+    KeywordBoostingPostProcessor,
+)
 import re
 
 # --- Tools ---
+
+
+def expand_query(query: str) -> str:
+    """Expands a search query with synonyms using the LLM."""
+    if not query or len(query.split()) > 10:  # Skip expansion for long queries
+        return query
+
+    prompt = (
+        f"You are a helpful medical assistant. "
+        f"Expand the following search query with relevant medical synonyms and acronyms. "
+        f"Return ONLY the expanded query string combined with OR operators. "
+        f"Do not add any explanation.\n\n"
+        f"Query: {query}\n"
+        f"Expanded Query:"
+    )
+    try:
+        # Use the global Settings.llm
+        if not Settings.llm:
+            # Fallback if not initialized (though load_index does it)
+            from modules.utils import setup_llama_index
+
+            setup_llama_index()
+
+        response = Settings.llm.complete(prompt)
+        expanded = response.text.strip()
+        # Clean up if LLM is chatty
+        if "Expanded Query:" in expanded:
+            expanded = expanded.split("Expanded Query:")[-1].strip()
+        print(f"✨ Expanded Query: '{query}' -> '{expanded}'")
+        return expanded
+    except Exception as e:
+        print(f"⚠️ Query expansion failed: {e}")
+        return query
 
 
 @langchain_tool("search_trials")
@@ -29,6 +71,7 @@ def search_trials(
     status: str = None,
     phase: str = None,
     sponsor: str = None,
+    intervention: str = None,
     year: int = None,
 ):
     """
@@ -46,6 +89,7 @@ def search_trials(
                                Accepts comma-separated values for multiple phases.
         sponsor (str, optional): Filter by sponsor name (e.g., "Pfizer").
                                  Accepts comma-separated values.
+        intervention (str, optional): Filter by intervention/drug name (e.g., "Keytruda").
         year (int, optional): Filter for studies starting on or after this year (e.g., 2020).
 
     Returns:
@@ -59,6 +103,8 @@ def search_trials(
         parts = []
         if sponsor:
             parts.append(sponsor)
+        if intervention:
+            parts.append(intervention)
         if phase:
             parts.append(phase)
         if status:
@@ -71,8 +117,13 @@ def search_trials(
             norm_sponsor = normalize_sponsor(sponsor)
             if norm_sponsor and norm_sponsor.lower() not in query.lower():
                 query = f"{norm_sponsor} {query}"
+        if intervention and intervention.lower() not in query.lower():
+            query = f"{intervention} {query}"
         if phase and phase.lower() not in query.lower():
             query = f"{phase} {query}"
+
+        # Expand query with synonyms
+        query = expand_query(query)
 
     # --- Pre-Retrieval Filters (ChromaDB) ---
     # These filters are applied *before* vector search, reducing the search space.
@@ -102,26 +153,34 @@ def search_trials(
     metadata_filters = MetadataFilters(filters=filters) if filters else None
 
     print(
-        f"🔍 Tool Called: search_trials(query='{query}', status='{status}', phase='{phase}', sponsor='{sponsor}')"
+        f"🔍 Tool Called: search_trials(query='{query}', status='{status}', phase='{phase}', sponsor='{sponsor}', intervention='{intervention}')"
     )
 
     # --- Post-Retrieval Filters (Custom) ---
     # These filters are applied *after* fetching candidates.
     # Useful for complex logic like fuzzy matching or multi-value fields that Chroma might not handle perfectly.
     post_filters = []
-    if phase or sponsor:
-        post_filters.append(LocalMetadataPostFilter(phase=phase, sponsor=sponsor))
+    if phase or sponsor or intervention:
+        post_filters.append(
+            LocalMetadataPostFilter(
+                phase=phase, sponsor=sponsor, intervention=intervention
+            )
+        )
+
+    # --- Hybrid Search Tuning ---
+    # Boost results with exact keyword matches in Title/ID
+    post_filters.append(KeywordBoostingPostProcessor())
 
     # --- Re-Ranking ---
     # Use a Cross-Encoder to re-score the top results for better relevance.
     reranker = SentenceTransformerRerank(
-        model="cross-encoder/ms-marco-MiniLM-L-6-v2", top_n=5
+        model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=5
     )
     post_filters.append(reranker)
 
     # Increase retrieval limit if filters are present to ensure we get enough candidates
     # before post-filtering reduces the count.
-    top_k = 200 if (phase or sponsor) else 50
+    top_k = 200 if (phase or sponsor or intervention) else 50
 
     query_engine = index.as_query_engine(
         similarity_top_k=top_k,
@@ -129,6 +188,24 @@ def search_trials(
         filters=metadata_filters,
     )
     response = query_engine.query(query)
+
+    # --- Self-Correction / Retry Logic ---
+    if not response.source_nodes and (phase or sponsor or intervention):
+        print(
+            "⚠️ No results found with strict filters. Retrying with relaxed filters..."
+        )
+        # Retry without the strict LocalMetadataPostFilter, but keep the Re-Ranker
+        relaxed_post_filters = [reranker]
+
+        query_engine_relaxed = index.as_query_engine(
+            similarity_top_k=50,
+            node_postprocessors=relaxed_post_filters,
+            filters=metadata_filters,  # Keep pre-retrieval filters (Status, Year) as they are usually hard constraints
+        )
+        response = query_engine_relaxed.query(query)
+        if response.source_nodes:
+            return f"No exact matches found for your strict filters. Here are some semantically relevant studies for '{query}':\n{response}"
+
     print(f"✅ Retrieved {len(response.source_nodes)} nodes after filtering.")
     return str(response)
 
@@ -148,16 +225,62 @@ def find_similar_studies(query: str):
         str: A string containing the top 5 similar studies with their titles and summaries.
     """
     index = load_index()
-    retriever = index.as_retriever(similarity_top_k=5)
-    nodes = retriever.retrieve(query)
+    
+    # 1. Check if query is an NCT ID
+    nct_match = re.search(r"NCT\d+", query, re.IGNORECASE)
+    target_nct = None
+    search_text = query
+
+    if nct_match:
+        target_nct = nct_match.group(0).upper()
+        print(f"🎯 Detected NCT ID for similarity: {target_nct}")
+        
+        # Fetch the study content to use as the semantic query
+        # We use the vector store directly to get the text
+        retriever = index.as_retriever(
+            filters=MetadataFilters(
+                filters=[MetadataFilter(key="nct_id", value=target_nct, operator=FilterOperator.EQ)]
+            ),
+            similarity_top_k=1
+        )
+        nodes = retriever.retrieve(target_nct)
+        
+        if nodes:
+            # Use the study's text (Title + Summary) as the query
+            search_text = nodes[0].text
+            print(f"✅ Found study content. Using {len(search_text)} chars for semantic search.")
+        else:
+            print(f"⚠️ Study {target_nct} not found. Falling back to text search.")
+
+    # 2. Perform Semantic Search
+    # Fetch more candidates (10) to allow for filtering
+    retriever = index.as_retriever(similarity_top_k=10)
+    nodes = retriever.retrieve(search_text)
 
     results = []
+    count = 0
     for node in nodes:
-        results.append(
-            f"Study: {node.metadata['title']} (Score: {node.score:.2f})\nSummary: {node.text[:200]}..."
-        )
+        # 3. Self-Exclusion
+        if target_nct and node.metadata.get("nct_id") == target_nct:
+            continue
+            
+        # Deduplication (if multiple chunks of same study appear)
+        if any(r["nct_id"] == node.metadata.get("nct_id") for r in results):
+            continue
 
-    return "\n\n".join(results)
+        results.append({
+            "nct_id": node.metadata.get("nct_id"),
+            "text": f"Study: {node.metadata['title']} (NCT: {node.metadata.get('nct_id')})\nScore: {node.score:.4f}\nSummary: {node.text[:200]}..."
+        })
+        
+        count += 1
+        if count >= 5:  # Limit to top 5 unique results
+            break
+
+    if not results:
+        return "No similar studies found."
+
+    return "\n\n".join([r["text"] for r in results])
 
 
 @langchain_tool("get_study_analytics")
@@ -167,6 +290,7 @@ def get_study_analytics(
     phase: Optional[str] = None,
     status: Optional[str] = None,
     sponsor: Optional[str] = None,
+    intervention: Optional[str] = None,
 ):
     """
     Aggregates clinical trial data based on a search query and groups by a specific field.
@@ -184,6 +308,7 @@ def get_study_analytics(
         phase (Optional[str]): Optional filter for phase (e.g., "PHASE2").
         status (Optional[str]): Optional filter for status (e.g., "RECRUITING").
         sponsor (Optional[str]): Optional filter for sponsor (e.g., "Pfizer").
+        intervention (Optional[str]): Optional filter for intervention (e.g., "Keytruda").
 
     Returns:
         str: A summary string of the top counts and a note that a chart has been generated.
@@ -205,12 +330,63 @@ def get_study_analytics(
             return f"Error fetching full dataset: {e}"
     else:
         # Semantic Search for specific queries (e.g., "breast cancer")
-        # We fetch a larger set (1000) to get a representative sample.
-        retriever = index.as_retriever(similarity_top_k=1000)
-        nodes = retriever.retrieve(query)
+        # We fetch a larger set (5000) to get a representative sample.
+
+        # Build Pre-Retrieval Filters
+        filters = []
+        if status:
+            filters.append(
+                MetadataFilter(
+                    key="status", value=status.upper(), operator=FilterOperator.EQ
+                )
+            )
+        if phase:
+            # Phase is often comma-separated in the tool input, but Chroma needs exact match or IN.
+            # Since our phases are stored as "PHASE1, PHASE2", exact match is tricky.
+            # We'll skip pre-filtering for Phase unless it's a single value, relying on post-filtering.
+            # This avoids excluding "PHASE2, PHASE3" when filtering for "PHASE2".
+            if "," not in phase:
+                # Only pre-filter if it's a single phase, assuming exact match might work for single-phase studies
+                # But even then, "PHASE1, PHASE2" wouldn't match "PHASE2".
+                # Safer to skip pre-filtering for Phase entirely and rely on Post-Filtering + High Top-K.
+                pass
+
+        # Sponsor Pre-Filtering using Robust Mapping
+        # If we have a known mapping for the sponsor, we use strict IN filtering.
+        # This guarantees we get all relevant records (e.g., all 13 Janssen variations).
+        if sponsor:
+            from modules.utils import get_sponsor_variations
+
+            sponsor_variations = get_sponsor_variations(sponsor)
+            if sponsor_variations:
+                print(
+                    f"🎯 Using strict pre-filter for sponsor '{sponsor}': {len(sponsor_variations)} variations found."
+                )
+                filters.append(
+                    MetadataFilter(
+                        key="org", value=sponsor_variations, operator=FilterOperator.IN
+                    )
+                )
+
+        metadata_filters = MetadataFilters(filters=filters) if filters else None
+
+        # Inject sponsor into query to boost vector search relevance (still useful for ranking)
+        search_query = query
+        if sponsor and sponsor.lower() not in query.lower():
+            search_query = f"{sponsor} {query}"
+
+        retriever = index.as_retriever(similarity_top_k=5000, filters=metadata_filters)
+        nodes = retriever.retrieve(search_query)
         data = [node.metadata for node in nodes]
 
     df = pd.DataFrame(data)
+    
+    # Deduplicate by NCT ID to avoid counting multiple chunks of the same study.
+    # NOTE: In LlamaIndex, metadata is propagated to ALL chunks (nodes) of a document.
+    # So, every chunk contains the full study metadata (Phase, Sponsor, Interventions).
+    # We must deduplicate to ensure each study is counted only once in the analytics.
+    if "nct_id" in df.columns:
+        df = df.drop_duplicates(subset="nct_id")
 
     if df.empty:
         return "No studies found for analytics."
@@ -235,6 +411,12 @@ def get_study_analytics(
         df["org_lower"] = df["org"].astype(str).apply(normalize_sponsor).str.lower()
         df = df[df["org_lower"].str.contains(target_sponsor, regex=False)]
 
+    # Filter by Intervention (Fuzzy match)
+    if intervention:
+        target_intervention = intervention.lower()
+        df["intervention_lower"] = df["intervention"].astype(str).str.lower()
+        df = df[df["intervention_lower"].str.contains(target_intervention, regex=False)]
+
     if df.empty:
         return "No studies found after applying filters."
 
@@ -245,10 +427,12 @@ def get_study_analytics(
         "sponsor": "org",
         "start_year": "start_year",
         "condition": "condition",
+        "intervention": "intervention",
+        "study_type": "study_type",
     }
 
     if group_by not in key_map:
-        return f"Invalid group_by field: {group_by}. Valid options: phase, status, sponsor, start_year, condition"
+        return f"Invalid group_by field: {group_by}. Valid options: phase, status, sponsor, start_year, condition, intervention, study_type"
 
     col = key_map[group_by]
 
@@ -261,6 +445,15 @@ def get_study_analytics(
         # Split and explode to count individual conditions
         # e.g., "Diabetes, Hypertension" -> ["Diabetes", "Hypertension"]
         counts = df[col].astype(str).str.split(", ").explode().value_counts().head(10)
+    elif col == "intervention":
+        # Split and explode to count individual interventions
+        # Interventions are separated by "; " (semicolon + space)
+        # e.g., "DRUG: A; DRUG: B" -> ["DRUG: A", "DRUG: B"]
+        all_interventions = []
+        for interventions in df[col].dropna():
+            parts = [i.strip() for i in interventions.split(";") if i.strip()]
+            all_interventions.extend(parts)
+        counts = pd.Series(all_interventions).value_counts().head(10)
     else:
         # Top 10 for categorical fields
         counts = df[col].value_counts().head(10)
@@ -268,24 +461,17 @@ def get_study_analytics(
     summary = counts.to_string()
 
     # --- Generate Chart Data ---
-    # This dictionary structure is expected by the frontend (Streamlit) to render Altair charts.
+    # Standardize column names to ensure Altair works consistently
+    chart_df = counts.reset_index()
+    chart_df.columns = ["category", "count"]  # Force standard names
+    
     chart_data = {
         "type": "bar",
         "title": f"Studies by {group_by.capitalize()}",
-        "data": counts.reset_index().to_dict("records"),
-        "x": "index",  # The category (e.g., Phase 1)
-        "y": col,  # The count column name
+        "data": chart_df.to_dict("records"),
+        "x": "category",
+        "y": "count",
     }
-
-    # Fix for pandas value_counts name consistency
-    if "index" not in chart_data["data"][0]:
-        # Reset index might have named it 'index' or the column name
-        # Let's standardize to ensure the UI can read it
-        chart_df = counts.reset_index()
-        chart_df.columns = [group_by, "Count"]
-        chart_data["data"] = chart_df.to_dict("records")
-        chart_data["x"] = group_by
-        chart_data["y"] = "Count"
 
     # Store in session state for the UI to pick up
     # This allows the tool (backend) to trigger a UI update (frontend)
@@ -295,3 +481,97 @@ def get_study_analytics(
         st.session_state["inline_chart_data"] = chart_data
 
     return f"Found {len(df)} studies. Top counts:\n{summary}\n\n(Chart generated in UI)"
+
+
+@langchain_tool("compare_studies")
+def compare_studies(query: str):
+    """
+    Compares multiple studies or answers complex multi-part questions using query decomposition.
+
+    Use this tool when the user asks to "compare", "contrast", or analyze differences/similarities
+    between specific studies, sponsors, or phases. It breaks down the question into sub-questions.
+
+    Args:
+        query (str): The complex comparison query (e.g., "Compare the primary outcomes of Keytruda vs Opdivo").
+
+    Returns:
+        str: A detailed response synthesizing the answers to sub-questions.
+    """
+    index = load_index()
+
+    # Create a base query engine for the sub-questions
+    # We use a standard engine with a reasonable top_k
+    base_engine = index.as_query_engine(similarity_top_k=10)
+
+    # Wrap it in a QueryEngineTool
+    query_tool = QueryEngineTool(
+        query_engine=base_engine,
+        metadata=ToolMetadata(
+            name="clinical_trials_db",
+            description="Vector database of clinical trial protocols, results, and metadata.",
+        ),
+    )
+
+    # Create the SubQuestionQueryEngine
+    # We explicitly define the question generator to use our configured LLM (Gemini)
+    # This avoids the default behavior which might try to import OpenAI modules
+    from llama_index.core.question_gen import LLMQuestionGenerator
+    from llama_index.core import Settings
+
+    question_gen = LLMQuestionGenerator.from_defaults(llm=Settings.llm)
+
+    query_engine = SubQuestionQueryEngine.from_defaults(
+        query_engine_tools=[query_tool],
+        question_gen=question_gen,
+        use_async=True,
+    )
+
+    try:
+        response = query_engine.query(query)
+        return str(response)
+    except Exception as e:
+        return f"Error during comparison: {e}"
+
+
+@langchain_tool("get_study_details")
+def get_study_details(nct_id: str):
+    """
+    Retrieves the full details of a specific clinical trial by its NCT ID.
+
+    Use this tool when the user asks for specific information about a single study,
+    such as "What are the inclusion criteria for NCT12345678?" or "Give me a summary of study NCT...".
+    It returns the full text content of the study document, including criteria, outcomes, and contacts.
+
+    Args:
+        nct_id (str): The NCT ID of the study (e.g., "NCT01234567").
+
+    Returns:
+        str: The full text content of the study, or a message if not found.
+    """
+    index = load_index()
+
+    # Clean the ID
+    clean_id = nct_id.strip().upper()
+
+    # Use a retriever with a strict metadata filter for the ID
+    # We set top_k=20 to capture all chunks if the document was split
+    filters = MetadataFilters(
+        filters=[
+            MetadataFilter(key="nct_id", value=clean_id, operator=FilterOperator.EQ)
+        ]
+    )
+
+    retriever = index.as_retriever(similarity_top_k=20, filters=filters)
+    nodes = retriever.retrieve(clean_id)
+
+    if not nodes:
+        return f"Study {clean_id} not found in the database."
+
+    # Sort nodes by their position in the document to reconstruct full text
+    # LlamaIndex nodes usually have 'start_char_idx' in metadata or relationships
+    # We'll try to sort by node ID or just concatenate them
+
+    # Simple concatenation (assuming retrieval order is roughly correct or sufficient)
+    full_text = "\n\n".join([node.text for node in nodes])
+
+    return f"Details for {clean_id} (Combined {len(nodes)} parts):\n\n{full_text}"

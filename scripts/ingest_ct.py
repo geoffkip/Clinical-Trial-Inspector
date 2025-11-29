@@ -11,6 +11,7 @@ Features:
 - **Efficiency**: Uses batch insertion and reuses the existing index.
 - **Progress Tracking**: Displays a progress bar using `tqdm`.
 """
+
 import requests
 import re
 from datetime import datetime, timedelta
@@ -18,7 +19,8 @@ from dotenv import load_dotenv
 import argparse
 import time
 from tqdm import tqdm
-import os 
+import os
+import concurrent.futures
 
 # LlamaIndex Imports
 from llama_index.core import Document, VectorStoreIndex, StorageContext, Settings
@@ -52,10 +54,7 @@ def clean_text(text: str) -> str:
 
 
 def fetch_trials_generator(
-    years: int = 5,
-    max_studies: int = 1000,
-    status: list = None,
-    phases: list = None
+    years: int = 5, max_studies: int = 1000, status: list = None, phases: list = None
 ):
     """
     Yields batches of clinical trials from the ClinicalTrials.gov API.
@@ -75,7 +74,7 @@ def fetch_trials_generator(
 
     # Calculate start date for filtering
     start_date = (datetime.now() - timedelta(days=365 * years)).strftime("%Y-%m-%d")
-    print(f"📡 Connecting to CT.gov API...")
+    print("📡 Connecting to CT.gov API...")
     print(f"🔎 Fetching trials starting after: {start_date}")
     if status:
         print(f"   Filters - Status: {status}")
@@ -112,7 +111,27 @@ def fetch_trials_generator(
             "query.term": full_query,
             "pageSize": current_limit,
             # Request specific fields to minimize payload size
-            "fields": "protocolSection.identificationModule.nctId,protocolSection.identificationModule.briefTitle,protocolSection.identificationModule.officialTitle,protocolSection.identificationModule.organization,protocolSection.statusModule.overallStatus,protocolSection.statusModule.startDateStruct,protocolSection.statusModule.completionDateStruct,protocolSection.designModule.phases,protocolSection.designModule.studyType,protocolSection.eligibilityModule.eligibilityCriteria,protocolSection.eligibilityModule.sex,protocolSection.eligibilityModule.stdAges,protocolSection.descriptionModule.briefSummary,protocolSection.conditionsModule.conditions,protocolSection.outcomesModule.primaryOutcomes,protocolSection.contactsLocationsModule.locations",
+            "fields": ",".join(
+                [
+                    "protocolSection.identificationModule.nctId",
+                    "protocolSection.identificationModule.briefTitle",
+                    "protocolSection.identificationModule.officialTitle",
+                    "protocolSection.identificationModule.organization",
+                    "protocolSection.statusModule.overallStatus",
+                    "protocolSection.statusModule.startDateStruct",
+                    "protocolSection.statusModule.completionDateStruct",
+                    "protocolSection.designModule.phases",
+                    "protocolSection.designModule.studyType",
+                    "protocolSection.eligibilityModule.eligibilityCriteria",
+                    "protocolSection.eligibilityModule.sex",
+                    "protocolSection.eligibilityModule.stdAges",
+                    "protocolSection.descriptionModule.briefSummary",
+                    "protocolSection.conditionsModule.conditions",
+                    "protocolSection.outcomesModule.primaryOutcomes",
+                    "protocolSection.contactsLocationsModule.locations",
+                    "protocolSection.armsInterventionsModule",
+                ]
+            ),
         }
 
         if next_page_token:
@@ -151,6 +170,115 @@ def fetch_trials_generator(
                     time.sleep(2)
                 else:
                     return  # Stop generator
+
+
+def process_study(study):
+    """
+    Processes a single study dictionary into a LlamaIndex Document.
+    This function is designed to be run in parallel.
+    """
+    try:
+        # Extract Modules
+        protocol = study.get("protocolSection", {})
+        identification = protocol.get("identificationModule", {})
+        status_module = protocol.get("statusModule", {})
+        design = protocol.get("designModule", {})
+        eligibility = protocol.get("eligibilityModule", {})
+        description = protocol.get("descriptionModule", {})
+        conditions_module = protocol.get("conditionsModule", {})
+        outcomes_module = protocol.get("outcomesModule", {})
+        arms_interventions_module = protocol.get("armsInterventionsModule", {})
+        locations_module = protocol.get("contactsLocationsModule", {})
+
+        # Extract Fields
+        nct_id = identification.get("nctId", "N/A")
+        title = identification.get("briefTitle", "N/A")
+        official_title = identification.get("officialTitle", "N/A")
+        org = identification.get("organization", {}).get("fullName", "N/A")
+        summary = clean_text(description.get("briefSummary", "N/A"))
+
+        overall_status = status_module.get("overallStatus", "N/A")
+        start_date = status_module.get("startDateStruct", {}).get("date", "N/A")
+        completion_date = status_module.get("completionDateStruct", {}).get(
+            "date", "N/A"
+        )
+
+        phases = ", ".join(design.get("phases", []))
+        study_type = design.get("studyType", "N/A")
+
+        criteria = clean_text(eligibility.get("eligibilityCriteria", "N/A"))
+        gender = eligibility.get("sex", "N/A")
+        ages = ", ".join(eligibility.get("stdAges", []))
+
+        conditions = ", ".join(conditions_module.get("conditions", []))
+
+        interventions = []
+        for interv in arms_interventions_module.get("interventions", []):
+            name = interv.get("name", "")
+            type_ = interv.get("type", "")
+            interventions.append(f"{type_}: {name}")
+        interventions_str = "; ".join(interventions)
+
+        primary_outcomes = []
+        for outcome in outcomes_module.get("primaryOutcomes", []):
+            measure = outcome.get("measure", "")
+            desc = outcome.get("description", "")
+            primary_outcomes.append(f"- {measure}: {desc}")
+        outcomes_str = clean_text("\n".join(primary_outcomes))
+
+        locations = []
+        for loc in locations_module.get("locations", []):
+            facility = loc.get("facility", "N/A")
+            city = loc.get("city", "")
+            country = loc.get("country", "")
+            locations.append(f"{facility} ({city}, {country})")
+        locations_str = "; ".join(locations[:5])  # Limit to 5 locations to save space
+
+        # Construct Rich Page Content with Markdown Headers
+        # This text is what gets embedded and searched
+        page_content = (
+            f"# {title}\n"
+            f"**NCT ID:** {nct_id}\n"
+            f"**Official Title:** {official_title}\n"
+            f"**Sponsor:** {org}\n"
+            f"**Status:** {overall_status}\n"
+            f"**Phase:** {phases}\n"
+            f"**Study Type:** {study_type}\n"
+            f"**Start Date:** {start_date}\n"
+            f"**Completion Date:** {completion_date}\n\n"
+            f"## Summary\n{summary}\n\n"
+            f"## Conditions\n{conditions}\n\n"
+            f"## Interventions\n{interventions_str}\n\n"
+            f"## Eligibility Criteria\n"
+            f"**Gender:** {gender}\n"
+            f"**Ages:** {ages}\n"
+            f"**Criteria:**\n{criteria}\n\n"
+            f"## Primary Outcomes\n{outcomes_str}\n\n"
+            f"## Locations\n{locations_str}"
+        )
+
+        # Metadata for filtering (Structured Data)
+        metadata = {
+            "nct_id": nct_id,
+            "title": title,
+            "org": org,
+            "status": overall_status,
+            "phase": phases,
+            "study_type": study_type,
+            "start_year": (int(start_date.split("-")[0]) if start_date != "N/A" else 0),
+            "condition": conditions,
+            "intervention": interventions_str,
+            "country": (
+                locations[0].split(",")[-1].strip() if locations else "Unknown"
+            ),
+        }
+
+        return Document(text=page_content, metadata=metadata, id_=nct_id)
+    except Exception as e:
+        print(
+            f"⚠️ Error processing study {study.get('protocolSection', {}).get('identificationModule', {}).get('nctId', 'Unknown')}: {e}"
+        )
+        return None
 
 
 def run_ingestion():
@@ -195,12 +323,12 @@ def run_ingestion():
 
     # Initialize ChromaDB (Persistent)
     print("🚀 Initializing ChromaDB...")
-    
+
     # Determine the project root directory (one level up from this script)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     db_path = os.path.join(project_root, "ct_gov_index")
-    
+
     db = chromadb.PersistentClient(path=db_path)
     chroma_collection = db.get_or_create_collection("clinical_trials")
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
@@ -222,120 +350,43 @@ def run_ingestion():
     )
 
     # --- INGESTION LOOP ---
-    for batch_studies in fetch_trials_generator(
-        years=args.years, max_studies=args.limit, status=status_list, phases=phase_list
-    ):
-        documents = []
-        for study in batch_studies:
-            try:
-                # Extract Modules
-                protocol = study.get("protocolSection", {})
-                identification = protocol.get("identificationModule", {})
-                status_module = protocol.get("statusModule", {})
-                design = protocol.get("designModule", {})
-                eligibility = protocol.get("eligibilityModule", {})
-                description = protocol.get("descriptionModule", {})
-                conditions_module = protocol.get("conditionsModule", {})
-                outcomes_module = protocol.get("outcomesModule", {})
-                locations_module = protocol.get("contactsLocationsModule", {})
+    # Use ProcessPoolExecutor for parallel processing of study data
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        for batch_studies in fetch_trials_generator(
+            years=args.years,
+            max_studies=args.limit,
+            status=status_list,
+            phases=phase_list,
+        ):
+            # Parallelize the processing of the batch
+            # map returns an iterator, so we convert to list to trigger execution
+            documents_iter = executor.map(process_study, batch_studies)
 
-                # Extract Fields
-                nct_id = identification.get("nctId", "N/A")
-                title = identification.get("briefTitle", "N/A")
-                official_title = identification.get("officialTitle", "N/A")
-                org = identification.get("organization", {}).get("fullName", "N/A")
-                summary = clean_text(description.get("briefSummary", "N/A"))
+            # Filter out None results (errors)
+            documents = [doc for doc in documents_iter if doc is not None]
 
-                overall_status = status_module.get("overallStatus", "N/A")
-                start_date = status_module.get("startDateStruct", {}).get("date", "N/A")
-                completion_date = status_module.get("completionDateStruct", {}).get(
-                    "date", "N/A"
-                )
+            if documents:
+                # Overwrite Logic:
+                # To avoid duplicates and ensure we update existing studies with new fields (like interventions),
+                # we first delete any existing records with the same NCT IDs.
+                doc_ids = [doc.id_ for doc in documents]
+                try:
+                    # Delete by metadata nct_id to be safe (covers all nodes for a doc)
+                    chroma_collection.delete(where={"nct_id": {"$in": doc_ids}})
+                except Exception:
+                    # Ignore if collection is empty or other minor errors
+                    pass
 
-                phases = ", ".join(design.get("phases", []))
-                study_type = design.get("studyType", "N/A")
+                # Efficient Batch Insertion
+                # We convert documents to nodes and insert them into the index.
+                # This handles embedding generation automatically.
+                parser = Settings.node_parser
+                nodes = parser.get_nodes_from_documents(documents)
 
-                criteria = clean_text(eligibility.get("eligibilityCriteria", "N/A"))
-                gender = eligibility.get("sex", "N/A")
-                ages = ", ".join(eligibility.get("stdAges", []))
+                index.insert_nodes(nodes)
 
-                conditions = ", ".join(conditions_module.get("conditions", []))
-
-                primary_outcomes = []
-                for outcome in outcomes_module.get("primaryOutcomes", []):
-                    measure = outcome.get("measure", "")
-                    desc = outcome.get("description", "")
-                    primary_outcomes.append(f"- {measure}: {desc}")
-                outcomes_str = clean_text("\n".join(primary_outcomes))
-
-                locations = []
-                for loc in locations_module.get("locations", []):
-                    facility = loc.get("facility", "N/A")
-                    city = loc.get("city", "")
-                    country = loc.get("country", "")
-                    locations.append(f"{facility} ({city}, {country})")
-                locations_str = "; ".join(
-                    locations[:5]
-                )  # Limit to 5 locations to save space
-
-                # Construct Rich Page Content with Markdown Headers
-                # This text is what gets embedded and searched
-                page_content = (
-                    f"# {title}\n"
-                    f"**NCT ID:** {nct_id}\n"
-                    f"**Official Title:** {official_title}\n"
-                    f"**Sponsor:** {org}\n"
-                    f"**Status:** {overall_status}\n"
-                    f"**Phase:** {phases}\n"
-                    f"**Study Type:** {study_type}\n"
-                    f"**Start Date:** {start_date}\n"
-                    f"**Completion Date:** {completion_date}\n\n"
-                    f"## Summary\n{summary}\n\n"
-                    f"## Conditions\n{conditions}\n\n"
-                    f"## Eligibility Criteria\n"
-                    f"**Gender:** {gender}\n"
-                    f"**Ages:** {ages}\n"
-                    f"**Criteria:**\n{criteria}\n\n"
-                    f"## Primary Outcomes\n{outcomes_str}\n\n"
-                    f"## Locations\n{locations_str}"
-                )
-
-                # Metadata for filtering (Structured Data)
-                metadata = {
-                    "nct_id": nct_id,
-                    "title": title,
-                    "org": org,
-                    "status": overall_status,
-                    "phase": phases,
-                    "study_type": study_type,
-                    "start_year": (
-                        int(start_date.split("-")[0]) if start_date != "N/A" else 0
-                    ),
-                    "condition": conditions,
-                    "country": (
-                        locations[0].split(",")[-1].strip() if locations else "Unknown"
-                    ),
-                }
-
-                doc = Document(text=page_content, metadata=metadata, id_=nct_id)
-                documents.append(doc)
-            except Exception as e:
-                print(
-                    f"⚠️ Error processing study {study.get('protocolSection', {}).get('identificationModule', {}).get('nctId', 'Unknown')}: {e}"
-                )
-                continue
-
-        if documents:
-            # Efficient Batch Insertion
-            # We convert documents to nodes and insert them into the index.
-            # This handles embedding generation automatically.
-            parser = Settings.node_parser
-            nodes = parser.get_nodes_from_documents(documents)
-
-            index.insert_nodes(nodes)
-
-            total_ingested += len(documents)
-            pbar.update(len(documents))
+                total_ingested += len(documents)
+                pbar.update(len(documents))
 
     pbar.close()
     print(f"🎉 Ingestion Complete! Total studies in DB: {total_ingested}")

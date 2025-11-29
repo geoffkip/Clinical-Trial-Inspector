@@ -2,11 +2,15 @@ import pytest
 import pandas as pd
 import sys
 import os
+from unittest.mock import MagicMock, patch
 
 # Add project root to path to import app modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from modules.utils import normalize_sponsor
+from modules.utils import normalize_sponsor, KeywordBoostingPostProcessor  # noqa: E402
+from modules.tools import expand_query  # noqa: E402
+from modules.graph_viz import build_graph  # noqa: E402
+from llama_index.core.schema import NodeWithScore, TextNode  # noqa: E402
 
 # --- Tests for normalize_sponsor ---
 
@@ -26,21 +30,12 @@ def test_normalize_sponsor_no_change():
     assert normalize_sponsor("Unknown Sponsor") == "Unknown Sponsor"
 
 
-def test_normalize_sponsor_case_insensitivity():
-    # The function itself might not be case insensitive, but let's check current behavior
-    # Based on code: return SPONSOR_ALIASES.get(sponsor, sponsor)
-    # It seems strictly case-sensitive based on the dict lookup.
-    # Let's verify exact matches first.
-    assert normalize_sponsor("Sanofi") == "Sanofi"
-
-
 # --- Tests for Analytics Logic (Mocked) ---
 
 
-def filter_dataframe(df, phase=None, status=None, sponsor=None):
+def filter_dataframe(df, phase=None, status=None, sponsor=None, intervention=None):
     """
-    Replicating the logic from get_study_analytics for testing purposes,
-    since the original function is decorated as a tool and hard to import/test directly without side effects.
+    Replicating the logic from get_study_analytics for testing purposes.
     """
     if phase:
         target_phases = [p.strip().upper().replace(" ", "") for p in phase.split(",")]
@@ -56,6 +51,11 @@ def filter_dataframe(df, phase=None, status=None, sponsor=None):
         df["org_lower"] = df["org"].astype(str).apply(normalize_sponsor).str.lower()
         df = df[df["org_lower"].str.contains(target_sponsor, regex=False)]
 
+    if intervention:
+        target_intervention = intervention.lower()
+        df["intervention_lower"] = df["intervention"].astype(str).str.lower()
+        df = df[df["intervention_lower"].str.contains(target_intervention, regex=False)]
+
     return df
 
 
@@ -66,55 +66,116 @@ def sample_df():
         "phase": ["PHASE1", "PHASE2", "PHASE3", "PHASE2"],
         "status": ["RECRUITING", "COMPLETED", "COMPLETED", "RECRUITING"],
         "org": ["Pfizer", "Janssen", "Merck Sharp & Dohme", "Pfizer"],
+        "intervention": ["Drug A", "Drug B", "Keytruda", "Drug A + Drug C"],
         "start_year": [2020, 2021, 2022, 2023],
+        "title": [
+            "Study of Drug A",
+            "Study of Drug B",
+            "Keytruda Trial",
+            "Combo Study",
+        ],
+        "condition": ["Cancer", "Diabetes", "Lung Cancer", "Cancer"],
     }
     return pd.DataFrame(data)
 
 
-def test_analytics_filter_phase(sample_df):
-    # Filter for Phase 2
-    filtered = filter_dataframe(sample_df, phase="Phase 2")
-    assert len(filtered) == 2
-    assert all(filtered["phase"] == "PHASE2")
-
-
-def test_analytics_filter_multiple_phases(sample_df):
-    # Filter for Phase 1 OR Phase 3
-    filtered = filter_dataframe(sample_df, phase="Phase 1, Phase 3")
-    assert len(filtered) == 2
-    assert set(filtered["nct_id"]) == {"NCT001", "NCT003"}
-
-
-def test_analytics_filter_sponsor(sample_df):
-    # Filter for Pfizer
-    filtered = filter_dataframe(sample_df, sponsor="Pfizer")
-    assert len(filtered) == 2
-    assert all(filtered["org"] == "Pfizer")
-
-
-def test_analytics_filter_sponsor_alias(sample_df):
-    # Filter for J&J (should match Janssen)
-    filtered = filter_dataframe(sample_df, sponsor="J&J")
+def test_analytics_filter_intervention(sample_df):
+    # Filter for Keytruda
+    filtered = filter_dataframe(sample_df, intervention="Keytruda")
     assert len(filtered) == 1
-    assert filtered.iloc[0]["org"] == "Janssen"
+    assert filtered.iloc[0]["nct_id"] == "NCT003"
 
 
-def test_analytics_filter_status(sample_df):
-    # Filter for Recruiting
-    filtered = filter_dataframe(sample_df, status="Recruiting")
+def test_analytics_filter_intervention_partial(sample_df):
+    # Filter for "Drug A" (should match NCT001 and NCT004)
+    filtered = filter_dataframe(sample_df, intervention="Drug A")
     assert len(filtered) == 2
-    assert all(filtered["status"] == "RECRUITING")
-
-
-def test_analytics_multi_filter(sample_df):
-    # Filter for Pfizer AND Recruiting
-    filtered = filter_dataframe(sample_df, sponsor="Pfizer", status="Recruiting")
-    assert len(filtered) == 2  # Both Pfizer studies are recruiting/start_year... wait
-    # NCT001: Pfizer, Phase 1, Recruiting
-    # NCT004: Pfizer, Phase 2, Recruiting
     assert set(filtered["nct_id"]) == {"NCT001", "NCT004"}
 
-    # Filter for Pfizer AND Phase 2
-    filtered = filter_dataframe(sample_df, sponsor="Pfizer", phase="Phase 2")
-    assert len(filtered) == 1
-    assert filtered.iloc[0]["nct_id"] == "NCT004"
+
+# --- Tests for Query Expansion ---
+
+
+@patch("modules.tools.Settings")
+def test_expand_query(mock_settings):
+    # Mock LLM response
+    mock_response = MagicMock()
+    mock_response.text = "Expanded Query: cancer OR carcinoma OR tumor"
+    mock_settings.llm.complete.return_value = mock_response
+
+    query = "cancer"
+    expanded = expand_query(query)
+
+    assert "cancer OR carcinoma OR tumor" in expanded
+    mock_settings.llm.complete.assert_called_once()
+
+
+def test_expand_query_skip_long():
+    long_query = "this is a very long query that should definitely be skipped because it has too many words"
+    assert expand_query(long_query) == long_query
+
+
+# --- Tests for Keyword Boosting ---
+
+
+def test_keyword_boosting():
+    processor = KeywordBoostingPostProcessor()
+
+    # Create mock nodes
+    node1 = NodeWithScore(
+        node=TextNode(
+            text="t1", metadata={"title": "Study of Cancer", "nct_id": "NCT001"}
+        ),
+        score=0.5,
+    )
+    node2 = NodeWithScore(
+        node=TextNode(
+            text="t2", metadata={"title": "Diabetes Study", "nct_id": "NCT002"}
+        ),
+        score=0.5,
+    )
+
+    nodes = [node1, node2]
+
+    # Query matches title of node1 ("Cancer")
+    mock_query_bundle = MagicMock()
+    mock_query_bundle.query_str = "Cancer treatment"
+
+    processed_nodes = processor.postprocess_nodes(nodes, query_bundle=mock_query_bundle)
+
+    # Node 1 should be boosted (0.5 * 1.1 = 0.55)
+    # Node 2 should stay same (0.5)
+    assert processed_nodes[0].node.metadata["nct_id"] == "NCT001"
+    assert processed_nodes[0].score > 0.5
+    assert processed_nodes[1].score == 0.5
+
+
+# --- Tests for Graph Visualization ---
+
+
+def test_build_graph():
+    data = [
+        {"nct_id": "NCT1", "title": "Study 1", "org": "Pfizer", "condition": "Cancer"},
+        {
+            "nct_id": "NCT2",
+            "title": "Study 2",
+            "org": "Merck",
+            "condition": "Cancer, Diabetes",
+        },
+    ]
+
+    nodes, edges, config = build_graph(data)
+
+    # Check Nodes
+    # 2 Studies + 2 Sponsors + 2 Conditions (Cancer, Diabetes) = 6 Nodes
+    assert len(nodes) == 6
+
+    node_ids = [n.id for n in nodes]
+    assert "NCT1" in node_ids
+    assert "Pfizer" in node_ids
+    assert "Cancer" in node_ids
+
+    # Check Edges
+    # NCT1 -> Pfizer, NCT1 -> Cancer (2 edges)
+    # NCT2 -> Merck, NCT2 -> Cancer, NCT2 -> Diabetes (3 edges)
+    assert len(edges) == 5

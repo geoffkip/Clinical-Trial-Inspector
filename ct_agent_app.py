@@ -7,6 +7,7 @@ This is the main Streamlit application script. It orchestrates:
 3.  **User Interface**: Renders the Streamlit UI with tabs for Chat, Analytics, and Raw Data.
 4.  **Visualization**: Handles dynamic chart generation using Altair.
 """
+
 import streamlit as st
 import pandas as pd
 import os
@@ -22,7 +23,15 @@ load_dotenv()
 
 # Module Imports
 from modules.utils import load_index, setup_llama_index
-from modules.tools import search_trials, find_similar_studies, get_study_analytics
+from modules.tools import (
+    search_trials,
+    find_similar_studies,
+    get_study_analytics,
+    compare_studies,
+    get_study_details,
+)
+from modules.graph_viz import build_graph
+from streamlit_agraph import agraph
 from streamlit_option_menu import option_menu
 
 # LangChain Imports
@@ -69,11 +78,18 @@ llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 # The index is loaded once and cached to avoid reloading on every interaction.
 index = load_index()
 
+
 # 3. Define Agent (Cached)
 @st.cache_resource
 def get_agent():
     """Initializes and caches the LangChain agent."""
-    tools = [search_trials, find_similar_studies, get_study_analytics]
+    tools = [
+        search_trials,
+        find_similar_studies,
+        get_study_analytics,
+        compare_studies,
+        get_study_details,
+    ]
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -85,7 +101,12 @@ def get_agent():
                 "Use the available tools to search for studies, find similar studies, and generate analytics. "
                 "When asked about 'trends', 'counts', or 'most common', ALWAYS use the `get_study_analytics` tool. "
                 "When asked to 'find studies' or 'search', use `search_trials`. "
+                "When asked to 'compare' multiple studies or answer complex multi-part questions, use `compare_studies`. "
                 "If the user asks for a specific study by ID (e.g., NCT12345678), `search_trials` handles that automatically. "
+                "However, if the user asks for specific **details**, **criteria**, **summary**, or **protocol** of a single study, "
+                "you MUST use the `get_study_details` tool to fetch the full content. "
+                "When reporting 'similar studies', ALWAYS include the similarity score provided by the tool "
+                "and DO NOT include the study that was used as the query (the reference study). "
                 "Provide concise, evidence-based answers citing specific studies when possible.",
             ),
             MessagesPlaceholder(variable_name="chat_history"),
@@ -97,17 +118,19 @@ def get_agent():
     agent = create_tool_calling_agent(llm, tools, prompt)
     return AgentExecutor(agent=agent, tools=tools, verbose=True)
 
+
 agent_executor = get_agent()
 
 # 4. UI Layout: Sidebar Navigation
 with st.sidebar:
     page = option_menu(
         "Navigation",
-        ["Chat Assistant", "Analytics Dashboard", "Raw Data"],
-        icons=["chat-dots", "graph-up", "database"],
+        ["Chat Assistant", "Analytics Dashboard", "Knowledge Graph", "Raw Data"],
+        icons=["chat-dots", "graph-up", "diagram-3", "database"],
         menu_icon="cast",
         default_index=0,
     )
+
 
 # --- Helper Functions ---
 def generate_dashboard_analytics():
@@ -118,8 +141,10 @@ def generate_dashboard_analytics():
         "Status": "status",
         "Sponsor": "sponsor",
         "Start Year": "start_year",
+        "Intervention": "intervention",
+        "Study Type": "study_type",
     }
-    
+
     # Get values from session state
     # We use .get() to avoid KeyErrors if the widget hasn't initialized yet (though it should have)
     g_by = st.session_state.get("dash_group_by", "Sponsor")
@@ -128,18 +153,21 @@ def generate_dashboard_analytics():
 
     with st.spinner(f"Analyzing studies by {g_by}..."):
         # Call the tool directly
-        result = get_study_analytics.invoke({
-            "query": "overall",
-            "group_by": group_map.get(g_by, "sponsor"),
-            "phase": p_filter if p_filter else None,
-            "sponsor": s_filter if s_filter else None,
-        })
+        result = get_study_analytics.invoke(
+            {
+                "query": "overall",
+                "group_by": group_map.get(g_by, "sponsor"),
+                "phase": p_filter if p_filter else None,
+                "sponsor": s_filter if s_filter else None,
+            }
+        )
 
         # The tool sets session state 'inline_chart_data'
         if "inline_chart_data" in st.session_state:
             st.session_state["dashboard_data"] = st.session_state["inline_chart_data"]
         else:
             st.warning(result)
+
 
 # --- PAGE 1: CHAT ---
 if page == "Chat Assistant":
@@ -167,7 +195,7 @@ if page == "Chat Assistant":
                     )
                     .interactive()
                 )
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, theme="streamlit", width="stretch")
 
     # Chat Input
     if prompt := st.chat_input("Ask about clinical trials..."):
@@ -218,7 +246,7 @@ if page == "Chat Assistant":
                                 )
                                 .interactive()
                             )
-                            st.altair_chart(chart, use_container_width=True)
+                            st.altair_chart(chart, theme="streamlit", width="stretch")
 
                         # Clean up session state
                         del st.session_state["inline_chart_data"]
@@ -244,7 +272,10 @@ if page == "Analytics Dashboard":
     with col1:
         st.subheader("Configuration")
         group_by = st.selectbox(
-            "Group By", ["Phase", "Status", "Sponsor", "Start Year"], index=2, key="dash_group_by"
+            "Group By",
+            ["Phase", "Status", "Sponsor", "Start Year", "Intervention", "Study Type"],
+            index=2,
+            key="dash_group_by",
         )
 
         # Optional Filters
@@ -253,7 +284,9 @@ if page == "Analytics Dashboard":
         filter_phase = st.text_input("Phase (e.g., Phase 2)", key="dash_phase")
         filter_sponsor = st.text_input("Sponsor (e.g., Pfizer)", key="dash_sponsor")
 
-        st.button("Generate Analytics", type="primary", on_click=generate_dashboard_analytics)
+        st.button(
+            "Generate Analytics", type="primary", on_click=generate_dashboard_analytics
+        )
 
     with col2:
         # Always render if data exists in session state
@@ -262,7 +295,9 @@ if page == "Analytics Dashboard":
             st.subheader(c_data["title"])
 
             # Altair Chart Rendering
-            if c_data["x"] == "start_year" or group_by == "Start Year": # Check both key and UI selection
+            if (
+                c_data["x"] == "start_year" or group_by == "Start Year"
+            ):  # Check both key and UI selection
                 # Line chart for years
                 chart = (
                     alt.Chart(pd.DataFrame(c_data["data"]))
@@ -293,13 +328,53 @@ if page == "Analytics Dashboard":
                     .interactive()
                 )
 
-            st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, theme="streamlit", width="stretch")
 
             # Show raw table
             with st.expander("View Source Data"):
                 st.dataframe(pd.DataFrame(c_data["data"]))
 
-# --- PAGE 3: RAW DATA ---
+# --- PAGE 3: KNOWLEDGE GRAPH ---
+if page == "Knowledge Graph":
+    st.header("🕸️ Interactive Knowledge Graph")
+    st.write("Visualize connections between Studies, Sponsors, and Conditions.")
+
+    col_g1, col_g2 = st.columns([1, 3])
+
+    with col_g1:
+        st.subheader("Graph Settings")
+        graph_query = st.text_input("Search Topic", value="Cancer")
+        limit = st.slider("Max Nodes", 10, 100, 50)
+
+        if st.button("Build Graph"):
+            with st.spinner("Fetching data and building graph..."):
+                # Use retriever to get relevant nodes
+                retriever = index.as_retriever(similarity_top_k=limit)
+                nodes = retriever.retrieve(graph_query)
+                data = [n.metadata for n in nodes]
+
+                # Build Graph
+                g_nodes, g_edges, g_config = build_graph(data)
+
+                st.session_state["graph_data"] = {
+                    "nodes": g_nodes,
+                    "edges": g_edges,
+                    "config": g_config,
+                }
+
+    with col_g2:
+        if "graph_data" in st.session_state:
+            g_data = st.session_state["graph_data"]
+            st.success(
+                f"Graph built with {len(g_data['nodes'])} nodes and {len(g_data['edges'])} edges."
+            )
+            agraph(
+                nodes=g_data["nodes"], edges=g_data["edges"], config=g_data["config"]
+            )
+        else:
+            st.info("Enter a topic and click 'Build Graph' to visualize connections.")
+
+# --- PAGE 4: RAW DATA ---
 if page == "Raw Data":
     st.header("📂 Raw Data Explorer")
     st.write("View and filter the underlying dataset.")
@@ -307,7 +382,7 @@ if page == "Raw Data":
     # Load a sample or full dataset? Full might be slow.
     # We load a sample (top 100) to avoid performance issues.
     col_raw_1, col_raw_2 = st.columns([1, 1])
-    
+
     with col_raw_1:
         if st.button("Load Sample Data (Top 100)"):
             with st.spinner("Fetching data..."):
@@ -324,9 +399,9 @@ if page == "Raw Data":
                         .astype(str)
                         .str.replace(",", "")
                     )
-                
+
                 # Store in session state to persist the table
-                st.session_state['sample_data'] = df_raw
+                st.session_state["sample_data"] = df_raw
 
     with col_raw_2:
         # Download Full Dataset Logic
@@ -335,35 +410,35 @@ if page == "Raw Data":
                 try:
                     # Access the underlying ChromaDB collection directly for speed
                     collection = index.vector_store._collection
-                    
+
                     # Fetch all metadata
                     all_data = collection.get(include=["metadatas"])
-                    
+
                     if all_data and all_data["metadatas"]:
                         df_full = pd.DataFrame(all_data["metadatas"])
-                        
+
                         # Convert to CSV
-                        csv = df_full.to_csv(index=False).encode('utf-8')
-                        st.session_state['full_csv'] = csv
+                        csv = df_full.to_csv(index=False).encode("utf-8")
+                        st.session_state["full_csv"] = csv
                         st.success(f"Ready! Fetched {len(df_full)} records.")
                     else:
                         st.warning("No data found in database.")
                 except Exception as e:
                     st.error(f"Error fetching data: {e}")
 
-        if 'full_csv' in st.session_state:
+        if "full_csv" in st.session_state:
             st.download_button(
                 label="⬇️ Download Full CSV",
-                data=st.session_state['full_csv'],
-                file_name='clinical_trials_full.csv',
-                mime='text/csv',
+                data=st.session_state["full_csv"],
+                file_name="clinical_trials_full.csv",
+                mime="text/csv",
             )
 
     # Display Sample Data Table (Full Width)
-    if 'sample_data' in st.session_state:
+    if "sample_data" in st.session_state:
         st.markdown("### Sample Data (Top 100)")
         st.dataframe(
-            st.session_state['sample_data'],
+            st.session_state["sample_data"],
             column_config={
                 "nct_id": "NCT ID",
                 "title": "Study Title",
@@ -372,6 +447,6 @@ if page == "Raw Data":
                 ),  # Force text to avoid commas
                 "url": st.column_config.LinkColumn("URL"),
             },
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )

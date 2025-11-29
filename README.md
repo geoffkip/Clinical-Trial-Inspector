@@ -2,33 +2,33 @@
 
 **Clinical Trial Inspector** is an advanced AI agent designed to revolutionize how researchers, clinicians, and analysts explore clinical trial data. By combining **Semantic Search**, **Retrieval-Augmented Generation (RAG)**, and **Visual Analytics**, it transforms raw data from [ClinicalTrials.gov](https://clinicaltrials.gov/) into actionable insights.
 
-Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, and **Google Gemini**, this tool goes beyond simple keyword search. It understands natural language, generates inline visualizations, and performs complex multi-dimensional analysis on the entire dataset.
+Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, **Streamlit-Agraph**, and **Google Gemini**, this tool goes beyond simple keyword search. It understands natural language, generates inline visualizations, performs complex multi-dimensional analysis, and visualizes relationships in an interactive knowledge graph.
 
 ## ✨ Key Features
 
 ### 🧠 Intelligent Search & RAG
 - **Natural Language Queries**: Ask complex questions like *"Find Phase 3 Pfizer studies for diabetes started after 2022"* or *"What are the inclusion criteria for recent Moderna trials?"*.
 - **Semantic Understanding**: Powered by **PubMedBERT** embeddings (`pritamdeka/S-PubMedBert-MS-MARCO`) to understand medical context better than keyword matching.
-- **AI Synthesis**: **Google Gemini (gemini-2.5-flash)** summarizes findings, compares studies, and answers follow-up questions with citations.
+- **Advanced Retrieval**:
+    - **Query Expansion**: Automatically expands queries with medical synonyms (e.g., "cancer" -> "carcinoma", "tumor") using the LLM.
+    - **Hybrid Search**: Combines semantic vector search with keyword boosting (BM25-style) for exact matches in titles/IDs.
+    - **Re-Ranking**: Uses a Cross-Encoder (`ms-marco-MiniLM`) to re-score results for maximum relevance.
+- **Query Decomposition**: Breaks down complex multi-part questions (e.g., *"Compare the primary outcomes of Keytruda vs Opdivo"*) into sub-questions for precise answers.
 
 ### 📊 Visual Analytics & Insights
 - **Inline Charts (Contextual)**: The agent automatically generates **Bar Charts** and **Line Charts** directly in the chat stream when you ask aggregation questions (e.g., *"Top sponsors for Multiple Myeloma"*).
-- **Analytics Dashboard (Global)**: The "Analytics Dashboard" page provides a high-level view of the **entire dataset** (60,000+ studies). It is always available via the sidebar and independent of your current chat query, allowing you to explore global trends while conversing.
-- **Precise Formatting**: Year-based trends are displayed with precision (e.g., "2023") using **Altair**.
+- **Analytics Dashboard (Global)**: A dedicated dashboard to analyze trends across the **entire dataset** (60,000+ studies), independent of your chat session.
+- **Interactive Knowledge Graph**: Visualize connections between **Studies**, **Sponsors**, and **Conditions** in a dynamic, interactive network graph.
 
 ### 🔍 Multi-Filter Analysis
 - **Complex Filtering**: Answer sophisticated questions by applying multiple filters simultaneously.
     - *Example*: *"For **Phase 2 and 3** studies, what are **Pfizer's** most common study indications?"*
-- **Full Dataset Scope**: General analytics questions (e.g., *"Who are the top sponsors in the dataset?"*) analyze the **entire 60,000+ study database**, not just a sample.
-- **Smart Retrieval**: For specific queries, the agent retrieves up to **5,000 relevant studies** to ensure comprehensive analysis.
+- **Full Dataset Scope**: General analytics questions analyze the **entire database**, not just a sample.
+- **Smart Retrieval**: Retrieves up to **5,000 relevant studies** for comprehensive analysis.
 
-### 🏥 Cohort Design & SQL Generation
-- **Criteria Translation**: Automatically translates unstructured Inclusion/Exclusion criteria into structured cohort definitions for claims analysis (e.g., mapping "Type 2 Diabetes" to ICD-10 codes).
-- **SQL Generation**: Generates sample SQL queries to help analysts identify eligible patient cohorts in real-world data (RWD) or claims databases.
-
-### 📂 Comprehensive Data Management
-- **Raw Data Export**: View and download the full dataset as a CSV, including **NCT ID**, **Title**, **Sponsor**, **Phase**, and **Conditions**.
-- **Local Vector Store**: Efficiently stores and retrieves tens of thousands of studies using **ChromaDB**.
+### ⚡ High-Performance Ingestion
+- **Parallel Processing**: Uses multi-core processing to ingest and embed thousands of studies per minute.
+- **Idempotent Updates**: Smartly updates existing records without duplication, allowing for seamless data refreshes.
 
 ## 🤖 Agent Capabilities & Tools
 
@@ -36,42 +36,69 @@ The agent is equipped with specialized tools to handle different types of reques
 
 ### 1. `search_trials`
 *   **Purpose**: Finds specific clinical trials based on natural language queries.
-*   **Capabilities**:
-    *   **Semantic Search**: Uses vector embeddings to find relevant studies even if keywords don't match exactly.
-    *   **Smart Filtering**: Automatically extracts filters for **Phase**, **Status**, and **Sponsor** from your query (e.g., "Recruiting Phase 3 studies by Moderna").
-    *   **Limit**: Returns the top 50 most relevant results for detailed inspection.
+*   **Capabilities**: Semantic Search, Smart Filtering (Phase, Status, Sponsor, Intervention), Query Expansion, Hybrid Search, Re-Ranking.
 
 ### 2. `get_study_analytics`
 *   **Purpose**: Aggregates data to reveal trends and insights.
-*   **Capabilities**:
-    *   **Multi-Filtering**: Can filter by **Phase**, **Status**, and **Sponsor** *before* aggregation (e.g., "Phase 2 studies by Pfizer").
-    *   **Grouping**: Supports grouping by **Phase**, **Status**, **Sponsor**, **Start Year**, and **Condition** (Indication).
-    *   **Full Dataset Access**: For general questions (e.g., "Top sponsors overall"), it scans the entire 60,000+ study database.
-    *   **Visuals**: Triggers inline **Bar** and **Line** charts in the chat.
+*   **Capabilities**: Multi-Filtering, Grouping (Phase, Status, Sponsor, Year, Condition), Full Dataset Access, Inline Visualization.
 
-### 3. `find_similar_studies`
+### 3. `compare_studies`
+*   **Purpose**: Handles complex comparison or multi-part questions.
+*   **Capabilities**: Uses **Query Decomposition** to break a complex query into sub-queries, executes them against the database, and synthesizes the results.
+
+### 4. `find_similar_studies`
 *   **Purpose**: Discovers studies that are semantically similar to a specific trial.
-*   **Capabilities**:
-    *   **Vector Similarity**: Calculates cosine similarity between study descriptions.
-    *   **Contextual**: Great for finding "more like this" when you've identified a study of interest.
+*   **Capabilities**: 
+    *   **NCT Lookup**: Automatically fetches content if queried with an NCT ID.
+    *   **Self-Exclusion**: Filters out the reference study from results.
+    *   **Scoring**: Returns similarity scores for transparency.
+
+### 5. `get_study_details`
+*   **Purpose**: Fetches the full text content of a specific study by NCT ID.
+*   **Capabilities**: Retrieves all chunks of a study to provide comprehensive details (Criteria, Summary, Protocol).
 
 ## ⚙️ How It Works (RAG Pipeline)
 
-1.  **Ingestion**: `ingest_ct.py` fetches study data from ClinicalTrials.gov. It creates a rich text representation of each study (Title, Summary, Criteria) and extracts structured metadata (Phase, Sponsor, Status).
-2.  **Embedding**: The text is converted into vector embeddings using `PubMedBERT`, a model optimized for biomedical text. These vectors are stored locally in **ChromaDB**.
-3.  **Retrieval (Hybrid Search)**: The agent uses a multi-stage retrieval process to ensure both semantic relevance and strict criteria matching:
-    *   **Semantic Search**: Your query is embedded and compared against the database to find conceptually similar studies (e.g., "heart failure" matches "cardiac insufficiency").
-    *   **Pre-Retrieval Filtering**: Strict filters (Status, Year, NCT ID) are applied *before* vector search to narrow the search space efficiently.
-    *   **Post-Retrieval Filtering**: Complex logic (e.g., "Phase 2 or 3", Sponsor aliases) is applied *after* fetching candidates to ensure precision.
-    *   **Re-Ranking**: A Cross-Encoder model (`ms-marco-MiniLM`) re-scores the final results to rank the most relevant studies at the top.
-4.  **Synthesis**: The top relevant studies are passed to **Google Gemini**, which synthesizes the information to answer your specific question, citing the source studies.
+1.  **Ingestion**: `ingest_ct.py` fetches study data from ClinicalTrials.gov. It extracts rich text (including **Eligibility Criteria** and **Interventions**) and structured metadata. It uses **multiprocessing** for speed.
+2.  **Embedding**: Text is converted into vector embeddings using `PubMedBERT` and stored in **ChromaDB**.
+3.  **Retrieval**:
+    *   **Query Transformation**: Synonyms are injected via LLM.
+    *   **Hybrid Search**: Vector search + Keyword Boosting.
+    *   **Filtering**: Pre-retrieval (Status, Year) and Post-retrieval (Phase, Sponsor, Intervention) filters.
+    *   **Re-Ranking**: Cross-Encoder re-scoring.
+4.  **Synthesis**: **Google Gemini** synthesizes the final answer.
+
+### 🏗️ Architecture Diagram
+
+```mermaid
+graph TD
+    subgraph Ingestion ["Ingestion Pipeline (Parallel)"]
+        API[ClinicalTrials.gov API] -->|Fetch Batches| Script[ingest_ct.py]
+        Script -->|Process & Embed| Chroma[(ChromaDB)]
+    end
+
+    subgraph Retrieval ["RAG Retrieval Flow"]
+        User[User Query] -->|Expand| Synonyms[Synonym Injection]
+        Synonyms -->|Hybrid Search| Vector[Vector Search] & Keyword[Keyword Boosting]
+        Vector & Keyword -->|Candidates| PreFilter[Pre-Retrieval Filters]
+        PreFilter -->|Candidates| PostFilter[Post-Retrieval Filters]
+        PostFilter -->|Top N| ReRank[Cross-Encoder Re-Ranking]
+        ReRank -->|Context| LLM[Google Gemini]
+        LLM -->|Answer| Response[Final Response]
+    end
+
+    subgraph Graph ["Knowledge Graph"]
+        Chroma -->|Metadata| GraphBuilder[build_graph]
+        GraphBuilder -->|Nodes & Edges| Agraph[Streamlit Agraph]
+    end
+```
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: Streamlit, Altair
+- **Frontend**: Streamlit, Altair, Streamlit-Agraph
 - **LLM**: Google Gemini (`gemini-2.5-flash`)
 - **Orchestration**: LangChain (Agents, Tool Calling)
-- **Retrieval (RAG)**: LlamaIndex (VectorStoreIndex, QueryEngine)
+- **Retrieval (RAG)**: LlamaIndex (VectorStoreIndex, SubQuestionQueryEngine)
 - **Vector Database**: ChromaDB (Local)
 - **Embeddings**: HuggingFace (`pritamdeka/S-PubMedBert-MS-MARCO`)
 
@@ -110,7 +137,7 @@ The agent is equipped with specialized tools to handle different types of reques
 ## 📖 Usage
 
 ### 1. Ingest Data
-Before running the agent, populate the local database. The ingestion script fetches studies from ClinicalTrials.gov and builds the vector index.
+Populate the local database. The script uses parallel processing for speed.
 
 ```bash
 # Recommended: Ingest 5000 recent studies
@@ -127,28 +154,27 @@ Launch the Streamlit application:
 streamlit run ct_agent_app.py
 ```
 
-The app will open in your browser at `http://localhost:8501`.
-
 ### 3. Ask Questions!
-Try these queries to see the agent in action:
-
 - **Search**: *"Find recruiting studies for Alzheimer's in the US."*
-- **Analytics**: *"Who are the top sponsors for Breast Cancer?"* (Triggers Inline Chart)
-- **Multi-Filter**: *"For Phase 3 studies, what are the top conditions studied by Merck?"*
-- **Trends**: *"How has the number of gene therapy studies changed over time?"*
+- **Comparison**: *"Compare the primary outcomes of Keytruda vs Opdivo."*
+- **Analytics**: *"Who are the top sponsors for Breast Cancer?"* (Now supports grouping by **Intervention** and **Study Type**!)
+- **Graph**: Go to the **Knowledge Graph** tab to visualize connections.
+
+## 🧪 Testing & Quality
+
+- **Unit Tests**: Run `python -m pytest tests/test_unit.py` to verify core logic.
+- **Linting**: Codebase is formatted with `black` and linted with `flake8`.
 
 ## 📂 Project Structure
 
-- `ct_agent_app.py`: Main application logic (Streamlit UI, Agent orchestration).
-- `modules/`: Contains refactored code modules.
-    - `utils.py`: Utility functions for data processing and UI helpers.
-    - `tools.py`: LangChain tool definitions (`search_trials`, `get_study_analytics`, etc.).
-- `scripts/`: Utility scripts.
-    - `ingest_ct.py`: Data pipeline script for fetching, processing, and embedding ClinicalTrials.gov data.
-    - `analyze_db.py`: Script for analyzing the contents of the local vector database.
-- `ct_gov_index/`: Persisted ChromaDB vector store.
-- `tests/`: Unit tests for the application.
-- `requirements.txt`: Project dependencies.
+- `ct_agent_app.py`: Main application logic.
+- `modules/`:
+    - `utils.py`: Configuration, Normalization, Custom Filters.
+    - `tools.py`: Tool definitions (`search_trials`, `compare_studies`, etc.).
+    - `graph_viz.py`: Knowledge Graph logic.
+- `scripts/`:
+    - `ingest_ct.py`: Parallel data ingestion pipeline.
+    - `analyze_db.py`: Database inspection.
 
-## ⚠️ Note on Quotas
-This project uses the free tier of Google Gemini API. If you encounter a "ResourceExhausted" error, please wait a minute before retrying.
+- `ct_gov_index/`: Persisted ChromaDB vector store.
+- `tests/`: Unit tests.
