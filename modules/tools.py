@@ -225,16 +225,62 @@ def find_similar_studies(query: str):
         str: A string containing the top 5 similar studies with their titles and summaries.
     """
     index = load_index()
-    retriever = index.as_retriever(similarity_top_k=5)
-    nodes = retriever.retrieve(query)
+    
+    # 1. Check if query is an NCT ID
+    nct_match = re.search(r"NCT\d+", query, re.IGNORECASE)
+    target_nct = None
+    search_text = query
+
+    if nct_match:
+        target_nct = nct_match.group(0).upper()
+        print(f"🎯 Detected NCT ID for similarity: {target_nct}")
+        
+        # Fetch the study content to use as the semantic query
+        # We use the vector store directly to get the text
+        retriever = index.as_retriever(
+            filters=MetadataFilters(
+                filters=[MetadataFilter(key="nct_id", value=target_nct, operator=FilterOperator.EQ)]
+            ),
+            similarity_top_k=1
+        )
+        nodes = retriever.retrieve(target_nct)
+        
+        if nodes:
+            # Use the study's text (Title + Summary) as the query
+            search_text = nodes[0].text
+            print(f"✅ Found study content. Using {len(search_text)} chars for semantic search.")
+        else:
+            print(f"⚠️ Study {target_nct} not found. Falling back to text search.")
+
+    # 2. Perform Semantic Search
+    # Fetch more candidates (10) to allow for filtering
+    retriever = index.as_retriever(similarity_top_k=10)
+    nodes = retriever.retrieve(search_text)
 
     results = []
+    count = 0
     for node in nodes:
-        results.append(
-            f"Study: {node.metadata['title']} (Score: {node.score:.2f})\nSummary: {node.text[:200]}..."
-        )
+        # 3. Self-Exclusion
+        if target_nct and node.metadata.get("nct_id") == target_nct:
+            continue
+            
+        # Deduplication (if multiple chunks of same study appear)
+        if any(r["nct_id"] == node.metadata.get("nct_id") for r in results):
+            continue
 
-    return "\n\n".join(results)
+        results.append({
+            "nct_id": node.metadata.get("nct_id"),
+            "text": f"Study: {node.metadata['title']} (NCT: {node.metadata.get('nct_id')})\nScore: {node.score:.4f}\nSummary: {node.text[:200]}..."
+        })
+        
+        count += 1
+        if count >= 5:  # Limit to top 5 unique results
+            break
+
+    if not results:
+        return "No similar studies found."
+
+    return "\n\n".join([r["text"] for r in results])
 
 
 @langchain_tool("get_study_analytics")
@@ -334,6 +380,13 @@ def get_study_analytics(
         data = [node.metadata for node in nodes]
 
     df = pd.DataFrame(data)
+    
+    # Deduplicate by NCT ID to avoid counting multiple chunks of the same study.
+    # NOTE: In LlamaIndex, metadata is propagated to ALL chunks (nodes) of a document.
+    # So, every chunk contains the full study metadata (Phase, Sponsor, Interventions).
+    # We must deduplicate to ensure each study is counted only once in the analytics.
+    if "nct_id" in df.columns:
+        df = df.drop_duplicates(subset="nct_id")
 
     if df.empty:
         return "No studies found for analytics."
@@ -374,10 +427,12 @@ def get_study_analytics(
         "sponsor": "org",
         "start_year": "start_year",
         "condition": "condition",
+        "intervention": "intervention",
+        "study_type": "study_type",
     }
 
     if group_by not in key_map:
-        return f"Invalid group_by field: {group_by}. Valid options: phase, status, sponsor, start_year, condition"
+        return f"Invalid group_by field: {group_by}. Valid options: phase, status, sponsor, start_year, condition, intervention, study_type"
 
     col = key_map[group_by]
 
@@ -390,6 +445,15 @@ def get_study_analytics(
         # Split and explode to count individual conditions
         # e.g., "Diabetes, Hypertension" -> ["Diabetes", "Hypertension"]
         counts = df[col].astype(str).str.split(", ").explode().value_counts().head(10)
+    elif col == "intervention":
+        # Split and explode to count individual interventions
+        # Interventions are separated by "; " (semicolon + space)
+        # e.g., "DRUG: A; DRUG: B" -> ["DRUG: A", "DRUG: B"]
+        all_interventions = []
+        for interventions in df[col].dropna():
+            parts = [i.strip() for i in interventions.split(";") if i.strip()]
+            all_interventions.extend(parts)
+        counts = pd.Series(all_interventions).value_counts().head(10)
     else:
         # Top 10 for categorical fields
         counts = df[col].value_counts().head(10)
@@ -397,24 +461,17 @@ def get_study_analytics(
     summary = counts.to_string()
 
     # --- Generate Chart Data ---
-    # This dictionary structure is expected by the frontend (Streamlit) to render Altair charts.
+    # Standardize column names to ensure Altair works consistently
+    chart_df = counts.reset_index()
+    chart_df.columns = ["category", "count"]  # Force standard names
+    
     chart_data = {
         "type": "bar",
         "title": f"Studies by {group_by.capitalize()}",
-        "data": counts.reset_index().to_dict("records"),
-        "x": "index",  # The category (e.g., Phase 1)
-        "y": col,  # The count column name
+        "data": chart_df.to_dict("records"),
+        "x": "category",
+        "y": "count",
     }
-
-    # Fix for pandas value_counts name consistency
-    if "index" not in chart_data["data"][0]:
-        # Reset index might have named it 'index' or the column name
-        # Let's standardize to ensure the UI can read it
-        chart_df = counts.reset_index()
-        chart_df.columns = [group_by, "Count"]
-        chart_data["data"] = chart_df.to_dict("records")
-        chart_data["x"] = group_by
-        chart_data["y"] = "Count"
 
     # Store in session state for the UI to pick up
     # This allows the tool (backend) to trigger a UI update (frontend)

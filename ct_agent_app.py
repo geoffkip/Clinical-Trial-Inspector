@@ -105,6 +105,8 @@ def get_agent():
                 "If the user asks for a specific study by ID (e.g., NCT12345678), `search_trials` handles that automatically. "
                 "However, if the user asks for specific **details**, **criteria**, **summary**, or **protocol** of a single study, "
                 "you MUST use the `get_study_details` tool to fetch the full content. "
+                "When reporting 'similar studies', ALWAYS include the similarity score provided by the tool "
+                "and DO NOT include the study that was used as the query (the reference study). "
                 "Provide concise, evidence-based answers citing specific studies when possible.",
             ),
             MessagesPlaceholder(variable_name="chat_history"),
@@ -139,6 +141,8 @@ def generate_dashboard_analytics():
         "Status": "status",
         "Sponsor": "sponsor",
         "Start Year": "start_year",
+        "Intervention": "intervention",
+        "Study Type": "study_type",
     }
 
     # Get values from session state
@@ -191,7 +195,7 @@ if page == "Chat Assistant":
                     )
                     .interactive()
                 )
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, theme="streamlit", width="stretch")
 
     # Chat Input
     if prompt := st.chat_input("Ask about clinical trials..."):
@@ -242,7 +246,7 @@ if page == "Chat Assistant":
                                 )
                                 .interactive()
                             )
-                            st.altair_chart(chart, use_container_width=True)
+                            st.altair_chart(chart, theme="streamlit", width="stretch")
 
                         # Clean up session state
                         del st.session_state["inline_chart_data"]
@@ -269,7 +273,7 @@ if page == "Analytics Dashboard":
         st.subheader("Configuration")
         group_by = st.selectbox(
             "Group By",
-            ["Phase", "Status", "Sponsor", "Start Year"],
+            ["Phase", "Status", "Sponsor", "Start Year", "Intervention", "Study Type"],
             index=2,
             key="dash_group_by",
         )
@@ -324,7 +328,7 @@ if page == "Analytics Dashboard":
                     .interactive()
                 )
 
-            st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, theme="streamlit", width="stretch")
 
             # Show raw table
             with st.expander("View Source Data"):
@@ -443,6 +447,6 @@ if page == "Raw Data":
                 ),  # Force text to avoid commas
                 "url": st.column_config.LinkColumn("URL"),
             },
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )

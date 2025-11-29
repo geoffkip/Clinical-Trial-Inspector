@@ -52,15 +52,21 @@ def analyze_db():
         print(f"✅ Found 'clinical_trials' collection with {count} documents.")
 
         # Fetch all metadata for analysis
-        # Note: For very large datasets (>100k), this might be slow and require batching.
-        # But for typical local use (<50k), fetching metadata only is fast enough.
         data = collection.get(include=["metadatas"])
-
+        
         if not data["metadatas"]:
             print("❌ No metadata found.")
             return
 
         df = pd.DataFrame(data["metadatas"])
+
+        if "nct_id" in df.columns:
+            unique_ncts = df["nct_id"].nunique()
+            print(f"🔢 Unique NCT IDs: {unique_ncts}")
+            if unique_ncts < count:
+                print(f"⚠️ Warning: {count - unique_ncts} duplicate records found!")
+        else:
+            print("⚠️ 'nct_id' field not found in metadata.")
 
         # --- Analysis Sections ---
 
@@ -94,11 +100,17 @@ def analyze_db():
 
         print("\n📊 --- Top Interventions ---")
         if "intervention" in df.columns:
-            # Interventions are comma-separated strings, so we split and explode them
+            # Interventions are semicolon-separated strings (from ingest_ct.py), so we split by "; "
             all_interventions = []
             for interventions in df["intervention"].dropna():
-                all_interventions.extend([i.strip() for i in interventions.split(",")])
-            print(pd.Series(all_interventions).value_counts().head(10))
+                # Split by semicolon and strip whitespace
+                parts = [i.strip() for i in interventions.split(";") if i.strip()]
+                all_interventions.extend(parts)
+            
+            if all_interventions:
+                print(pd.Series(all_interventions).value_counts().head(20))
+            else:
+                print("No interventions found.")
         else:
             print("⚠️ 'intervention' field not found in metadata.")
 

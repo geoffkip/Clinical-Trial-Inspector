@@ -48,11 +48,18 @@ The agent is equipped with specialized tools to handle different types of reques
 
 ### 4. `find_similar_studies`
 *   **Purpose**: Discovers studies that are semantically similar to a specific trial.
-*   **Capabilities**: Vector Similarity Search for "more like this" discovery.
+*   **Capabilities**: 
+    *   **NCT Lookup**: Automatically fetches content if queried with an NCT ID.
+    *   **Self-Exclusion**: Filters out the reference study from results.
+    *   **Scoring**: Returns similarity scores for transparency.
+
+### 5. `get_study_details`
+*   **Purpose**: Fetches the full text content of a specific study by NCT ID.
+*   **Capabilities**: Retrieves all chunks of a study to provide comprehensive details (Criteria, Summary, Protocol).
 
 ## ⚙️ How It Works (RAG Pipeline)
 
-1.  **Ingestion**: `ingest_ct.py` fetches study data from ClinicalTrials.gov. It creates a rich text representation and extracts structured metadata. It uses **multiprocessing** for speed.
+1.  **Ingestion**: `ingest_ct.py` fetches study data from ClinicalTrials.gov. It extracts rich text (including **Eligibility Criteria** and **Interventions**) and structured metadata. It uses **multiprocessing** for speed.
 2.  **Embedding**: Text is converted into vector embeddings using `PubMedBERT` and stored in **ChromaDB**.
 3.  **Retrieval**:
     *   **Query Transformation**: Synonyms are injected via LLM.
@@ -150,7 +157,7 @@ streamlit run ct_agent_app.py
 ### 3. Ask Questions!
 - **Search**: *"Find recruiting studies for Alzheimer's in the US."*
 - **Comparison**: *"Compare the primary outcomes of Keytruda vs Opdivo."*
-- **Analytics**: *"Who are the top sponsors for Breast Cancer?"*
+- **Analytics**: *"Who are the top sponsors for Breast Cancer?"* (Now supports grouping by **Intervention** and **Study Type**!)
 - **Graph**: Go to the **Knowledge Graph** tab to visualize connections.
 
 ## 🧪 Testing & Quality
@@ -168,5 +175,6 @@ streamlit run ct_agent_app.py
 - `scripts/`:
     - `ingest_ct.py`: Parallel data ingestion pipeline.
     - `analyze_db.py`: Database inspection.
+
 - `ct_gov_index/`: Persisted ChromaDB vector store.
 - `tests/`: Unit tests.
