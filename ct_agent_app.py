@@ -4,7 +4,7 @@ import pandas as pd
 import os
 import altair as alt
 
-__version__ = "1.0.0"
+
 
 import logging
 logging.getLogger("langchain_google_genai._function_utils").setLevel(logging.ERROR)
@@ -92,7 +92,9 @@ def normalize_sponsor(sponsor: str) -> str:
         "johnson and johnson": "Janssen",
         "janssen": "Janssen",
         "bms": "Bristol-Myers Squibb",
-        "bristol myers squibb": "Bristol-Myers Squibb"
+        "bristol myers squibb": "Bristol-Myers Squibb",
+        "merck": "Merck Sharp & Dohme",
+        "msd": "Merck Sharp & Dohme"
     }
     
     for alias, canonical in aliases.items():
@@ -512,7 +514,7 @@ if prompt := st.chat_input("Ask about clinical trials..."):
 # 6. Analytics & Export (On-Demand)
 with st.sidebar:
     st.header("📊 Analytics & Export")
-    st.caption(f"v{__version__}")
+
     
     # --- Analytics Scope ---
     st.write("Analyze trends in the clinical trial data.")
