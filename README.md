@@ -20,6 +20,12 @@ Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, **Streamlit
 - **Analytics Dashboard (Global)**: A dedicated dashboard to analyze trends across the **entire dataset** (60,000+ studies), independent of your chat session.
 - **Interactive Knowledge Graph**: Visualize connections between **Studies**, **Sponsors**, and **Conditions** in a dynamic, interactive network graph.
 
+### 🌍 Geospatial Dashboard
+- **Global Trial Map**: Visualize the geographic distribution of clinical trials on an interactive world map.
+- **Region Toggle**: Switch between **World View** (Country-level aggregation) and **USA View** (State-level aggregation).
+- **Dot Visualization**: Uses dynamic **CircleMarkers** (dots) sized by trial count to show density.
+- **Interactive Filters**: Filter the map by **Phase**, **Status**, **Sponsor**, **Start Year**, and **Study Type**.
+
 ### 🔍 Multi-Filter Analysis
 - **Complex Filtering**: Answer sophisticated questions by applying multiple filters simultaneously.
     - *Example*: *"For **Phase 2 and 3** studies, what are **Pfizer's** most common study indications?"*

@@ -14,3 +14,5 @@ llama-index-embeddings-huggingface
 llama-index-llms-gemini
 streamlit-option-menu
 streamlit-agraph
+folium
+streamlit-folium

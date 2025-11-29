@@ -22,18 +22,23 @@ logging.getLogger("langchain_google_genai._function_utils").setLevel(logging.ERR
 load_dotenv()
 
 # Module Imports
-from modules.utils import load_index, setup_llama_index
+from modules.utils import load_index, setup_llama_index, COUNTRY_COORDINATES, STATE_COORDINATES
+
+# ... (imports)
 from modules.tools import (
     search_trials,
     find_similar_studies,
     get_study_analytics,
     compare_studies,
     get_study_details,
+    fetch_study_analytics_data,
 )
 from modules.cohort_tools import get_cohort_sql
 from modules.graph_viz import build_graph
 from streamlit_agraph import agraph
 from streamlit_option_menu import option_menu
+import folium
+from streamlit_folium import st_folium
 
 # LangChain Imports
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -125,12 +130,17 @@ def get_agent():
 
 agent_executor = get_agent()
 
-# 4. UI Layout: Sidebar Navigation
+# --- Sidebar ---
 with st.sidebar:
+    st.image(
+        "https://cdn-icons-png.flaticon.com/512/3004/3004458.png", width=50
+    )
+    st.title("Clinical Trial Agent")
+    
     page = option_menu(
-        "Navigation",
-        ["Chat Assistant", "Analytics Dashboard", "Knowledge Graph", "Raw Data"],
-        icons=["chat-dots", "graph-up", "diagram-3", "database"],
+        "Main Menu",
+        ["Chat Assistant", "Analytics Dashboard", "Knowledge Graph", "Study Map", "Raw Data"],
+        icons=["chat-dots", "graph-up", "diagram-3", "map", "database"],
         menu_icon="cast",
         default_index=0,
     )
@@ -377,6 +387,99 @@ if page == "Knowledge Graph":
             )
         else:
             st.info("Enter a topic and click 'Build Graph' to visualize connections.")
+
+# --- PAGE# --- Study Map Tab ---
+elif page == "Study Map":
+    st.header("🌍 Global Clinical Trial Map")
+    st.markdown("Visualize the geographic distribution of clinical trials.")
+
+    # Sidebar Filters for Map
+    st.sidebar.markdown("### 🗺️ Map Filters")
+    map_region = st.sidebar.radio("Region", ["World", "USA"], index=0)
+    
+    map_phase = st.sidebar.multiselect(
+        "Phase", ["PHASE1", "PHASE2", "PHASE3", "PHASE4"], default=["PHASE2", "PHASE3"]
+    )
+    map_status = st.sidebar.selectbox(
+        "Status", ["RECRUITING", "COMPLETED", "ACTIVE_NOT_RECRUITING"], index=0
+    )
+    map_sponsor = st.sidebar.text_input("Sponsor (Optional)", "")
+    map_year = st.sidebar.number_input("Start Year (>=)", min_value=2000, value=2020)
+    map_type = st.sidebar.selectbox(
+        "Study Type", ["Interventional", "Observational", "All"], index=0
+    )
+
+    # Convert filters to arguments
+    phase_str = ",".join(map_phase) if map_phase else None
+    type_arg = map_type if map_type != "All" else None
+
+    if st.button("Update Map"):
+        with st.spinner("Aggregating geographic data..."):
+            # Determine grouping based on Region
+            group_by_field = "state" if map_region == "USA" else "country"
+            
+            # Call analytics logic directly
+            summary = fetch_study_analytics_data(
+                query="overall",
+                group_by=group_by_field,
+                phase=phase_str,
+                status=map_status,
+                sponsor=map_sponsor,
+                start_year=map_year,
+                study_type=type_arg,
+            )
+            
+            # Retrieve data from session state
+            chart_data = st.session_state.get("inline_chart_data", {})
+            data_records = chart_data.get("data", [])
+            
+            if not data_records:
+                st.warning("No data found for these filters.")
+                st.session_state["map_data"] = None
+                st.session_state["map_region"] = map_region # Store region too
+            else:
+                # Store in session state for persistence
+                st.session_state["map_data"] = data_records
+                st.session_state["map_region"] = map_region
+
+    # Render Map (Outside Button Block)
+    if st.session_state.get("map_data"):
+        data_records = st.session_state["map_data"]
+        region_mode = st.session_state.get("map_region", "World")
+        df_map = pd.DataFrame(data_records)
+        
+        # Configure Map Center/Zoom
+        if region_mode == "USA":
+            m = folium.Map(location=[37.0902, -95.7129], zoom_start=4)
+            coord_map = STATE_COORDINATES
+        else:
+            m = folium.Map(location=[20, 0], zoom_start=2)
+            coord_map = COUNTRY_COORDINATES
+        
+        # Add CircleMarkers
+        for _, row in df_map.iterrows():
+            loc_name = row["category"]
+            count = row["count"]
+            
+            # Clean name if needed (strip trailing parenthesis)
+            loc_clean = loc_name.rstrip(")")
+            coords = coord_map.get(loc_clean)
+            
+            if coords:
+                folium.CircleMarker(
+                    location=coords,
+                    radius=min(max(count / 5, 3), 20),  # Adjust scale
+                    popup=f"{loc_clean}: {count} trials",
+                    color="blue" if region_mode == "USA" else "crimson",
+                    fill=True,
+                    fill_color="blue" if region_mode == "USA" else "crimson",
+                ).add_to(m)
+        
+        st_folium(m, width=800, height=500)
+        
+        # Show data table
+        st.subheader(f"{region_mode} Data")
+        st.dataframe(df_map)
 
 # --- PAGE 4: RAW DATA ---
 if page == "Raw Data":

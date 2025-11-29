@@ -283,6 +283,154 @@ def find_similar_studies(query: str):
     return "\n\n".join([r["text"] for r in results])
 
 
+def fetch_study_analytics_data(
+    query: str,
+    group_by: str,
+    phase: Optional[str] = None,
+    status: Optional[str] = None,
+    sponsor: Optional[str] = None,
+    intervention: Optional[str] = None,
+    start_year: Optional[int] = None,
+    study_type: Optional[str] = None,
+) -> str:
+    """
+    Underlying logic for fetching and aggregating clinical trial data.
+    See get_study_analytics for full docstring.
+    """
+    index = load_index()
+
+    # 1. Retrieve Data
+    if query.lower() == "overall":
+        try:
+            collection = index.vector_store._collection
+            result = collection.get(include=["metadatas"])
+            data = result["metadatas"]
+        except Exception as e:
+            return f"Error fetching full dataset: {e}"
+    else:
+        filters = []
+        if status:
+            filters.append(
+                MetadataFilter(
+                    key="status", value=status.upper(), operator=FilterOperator.EQ
+                )
+            )
+        if phase and "," not in phase:
+             pass
+
+        if sponsor:
+            from modules.utils import get_sponsor_variations
+            sponsor_variations = get_sponsor_variations(sponsor)
+            if sponsor_variations:
+                print(
+                    f"🎯 Using strict pre-filter for sponsor '{sponsor}': {len(sponsor_variations)} variations found."
+                )
+                filters.append(
+                    MetadataFilter(
+                        key="org", value=sponsor_variations, operator=FilterOperator.IN
+                    )
+                )
+
+        metadata_filters = MetadataFilters(filters=filters) if filters else None
+
+        search_query = query
+        if sponsor and sponsor.lower() not in query.lower():
+            search_query = f"{sponsor} {query}"
+
+        retriever = index.as_retriever(similarity_top_k=5000, filters=metadata_filters)
+        nodes = retriever.retrieve(search_query)
+        data = [node.metadata for node in nodes]
+
+    df = pd.DataFrame(data)
+    
+    if "nct_id" in df.columns:
+        df = df.drop_duplicates(subset="nct_id")
+
+    if df.empty:
+        return "No studies found for analytics."
+
+    # --- APPLY FILTERS (Pandas) ---
+    if phase:
+        target_phases = [p.strip().upper().replace(" ", "") for p in phase.split(",")]
+        df["phase_upper"] = df["phase"].astype(str).str.upper().str.replace(" ", "")
+        mask = df["phase_upper"].apply(lambda x: any(tp in x for tp in target_phases))
+        df = df[mask]
+
+    if status:
+        df = df[df["status"].str.upper() == status.upper()]
+
+    if sponsor:
+        target_sponsor = normalize_sponsor(sponsor).lower()
+        df["org_lower"] = df["org"].astype(str).apply(normalize_sponsor).str.lower()
+        df = df[df["org_lower"].str.contains(target_sponsor, regex=False)]
+
+    if intervention:
+        target_intervention = intervention.lower()
+        df["intervention_lower"] = df["intervention"].astype(str).str.lower()
+        df = df[df["intervention_lower"].str.contains(target_intervention, regex=False)]
+
+    if start_year:
+        df["start_year"] = pd.to_numeric(df["start_year"], errors="coerce").fillna(0)
+        df = df[df["start_year"] >= start_year]
+
+    if study_type:
+        df = df[df["study_type"].str.upper() == study_type.upper()]
+
+    if df.empty:
+        return "No studies found after applying filters."
+
+    key_map = {
+        "phase": "phase",
+        "status": "status",
+        "sponsor": "org",
+        "start_year": "start_year",
+        "condition": "condition",
+        "intervention": "intervention",
+        "study_type": "study_type",
+        "country": "country",
+        "state": "state",
+    }
+
+    if group_by not in key_map:
+        return f"Invalid group_by field: {group_by}. Valid options: phase, status, sponsor, start_year, condition, intervention, study_type, country, state"
+
+    col = key_map[group_by]
+
+    if col == "start_year":
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        counts = df[col].value_counts().sort_index()
+    elif col == "condition":
+        counts = df[col].astype(str).str.split(", ").explode().value_counts().head(10)
+    elif col == "intervention":
+        all_interventions = []
+        for interventions in df[col].dropna():
+            parts = [i.strip() for i in interventions.split(";") if i.strip()]
+            all_interventions.extend(parts)
+        counts = pd.Series(all_interventions).value_counts().head(10)
+    else:
+        counts = df[col].value_counts().head(10)
+
+    summary = counts.to_string()
+
+    chart_df = counts.reset_index()
+    chart_df.columns = ["category", "count"]
+    
+    chart_data = {
+        "type": "bar",
+        "title": f"Studies by {group_by.capitalize()}",
+        "data": chart_df.to_dict("records"),
+        "x": "category",
+        "y": "count",
+    }
+
+    if "inline_chart_data" not in st.session_state:
+        st.session_state["inline_chart_data"] = chart_data
+    else:
+        st.session_state["inline_chart_data"] = chart_data
+
+    return f"Found {len(df)} studies. Top counts:\n{summary}\n\n(Chart generated in UI)"
+
+
 @langchain_tool("get_study_analytics")
 def get_study_analytics(
     query: str,
@@ -291,10 +439,12 @@ def get_study_analytics(
     status: Optional[str] = None,
     sponsor: Optional[str] = None,
     intervention: Optional[str] = None,
+    start_year: Optional[int] = None,
+    study_type: Optional[str] = None,
 ):
     """
     Aggregates clinical trial data based on a search query and groups by a specific field.
-
+    
     This tool performs the following steps:
     1.  Retrieves a large number of relevant studies (up to 500).
     2.  Applies strict filters (Phase, Status, Sponsor) in memory (Pandas).
@@ -313,174 +463,16 @@ def get_study_analytics(
     Returns:
         str: A summary string of the top counts and a note that a chart has been generated.
     """
-    index = load_index()
-
-    # 1. Retrieve Data
-    # If query is "overall" (used by the global dashboard), we fetch ALL metadata directly
-    # from the underlying collection to ensure accurate counts.
-    # Otherwise, we use semantic search with a high limit.
-    if query.lower() == "overall":
-        try:
-            # Access underlying Chroma collection
-            collection = index.vector_store._collection
-            # Fetch all metadata (no embeddings/documents needed for analytics)
-            result = collection.get(include=["metadatas"])
-            data = result["metadatas"]
-        except Exception as e:
-            return f"Error fetching full dataset: {e}"
-    else:
-        # Semantic Search for specific queries (e.g., "breast cancer")
-        # We fetch a larger set (5000) to get a representative sample.
-
-        # Build Pre-Retrieval Filters
-        filters = []
-        if status:
-            filters.append(
-                MetadataFilter(
-                    key="status", value=status.upper(), operator=FilterOperator.EQ
-                )
-            )
-        if phase:
-            # Phase is often comma-separated in the tool input, but Chroma needs exact match or IN.
-            # Since our phases are stored as "PHASE1, PHASE2", exact match is tricky.
-            # We'll skip pre-filtering for Phase unless it's a single value, relying on post-filtering.
-            # This avoids excluding "PHASE2, PHASE3" when filtering for "PHASE2".
-            if "," not in phase:
-                # Only pre-filter if it's a single phase, assuming exact match might work for single-phase studies
-                # But even then, "PHASE1, PHASE2" wouldn't match "PHASE2".
-                # Safer to skip pre-filtering for Phase entirely and rely on Post-Filtering + High Top-K.
-                pass
-
-        # Sponsor Pre-Filtering using Robust Mapping
-        # If we have a known mapping for the sponsor, we use strict IN filtering.
-        # This guarantees we get all relevant records (e.g., all 13 Janssen variations).
-        if sponsor:
-            from modules.utils import get_sponsor_variations
-
-            sponsor_variations = get_sponsor_variations(sponsor)
-            if sponsor_variations:
-                print(
-                    f"🎯 Using strict pre-filter for sponsor '{sponsor}': {len(sponsor_variations)} variations found."
-                )
-                filters.append(
-                    MetadataFilter(
-                        key="org", value=sponsor_variations, operator=FilterOperator.IN
-                    )
-                )
-
-        metadata_filters = MetadataFilters(filters=filters) if filters else None
-
-        # Inject sponsor into query to boost vector search relevance (still useful for ranking)
-        search_query = query
-        if sponsor and sponsor.lower() not in query.lower():
-            search_query = f"{sponsor} {query}"
-
-        retriever = index.as_retriever(similarity_top_k=5000, filters=metadata_filters)
-        nodes = retriever.retrieve(search_query)
-        data = [node.metadata for node in nodes]
-
-    df = pd.DataFrame(data)
-    
-    # Deduplicate by NCT ID to avoid counting multiple chunks of the same study.
-    # NOTE: In LlamaIndex, metadata is propagated to ALL chunks (nodes) of a document.
-    # So, every chunk contains the full study metadata (Phase, Sponsor, Interventions).
-    # We must deduplicate to ensure each study is counted only once in the analytics.
-    if "nct_id" in df.columns:
-        df = df.drop_duplicates(subset="nct_id")
-
-    if df.empty:
-        return "No studies found for analytics."
-
-    # --- APPLY FILTERS (Pandas) ---
-    # We apply filters here (post-retrieval) for maximum flexibility on the retrieved set.
-
-    # Filter by Phase
-    if phase:
-        target_phases = [p.strip().upper().replace(" ", "") for p in phase.split(",")]
-        df["phase_upper"] = df["phase"].astype(str).str.upper().str.replace(" ", "")
-        mask = df["phase_upper"].apply(lambda x: any(tp in x for tp in target_phases))
-        df = df[mask]
-
-    # Filter by Status
-    if status:
-        df = df[df["status"].str.upper() == status.upper()]
-
-    # Filter by Sponsor (Fuzzy match)
-    if sponsor:
-        target_sponsor = normalize_sponsor(sponsor).lower()
-        df["org_lower"] = df["org"].astype(str).apply(normalize_sponsor).str.lower()
-        df = df[df["org_lower"].str.contains(target_sponsor, regex=False)]
-
-    # Filter by Intervention (Fuzzy match)
-    if intervention:
-        target_intervention = intervention.lower()
-        df["intervention_lower"] = df["intervention"].astype(str).str.lower()
-        df = df[df["intervention_lower"].str.contains(target_intervention, regex=False)]
-
-    if df.empty:
-        return "No studies found after applying filters."
-
-    # Map group_by to metadata keys
-    key_map = {
-        "phase": "phase",
-        "status": "status",
-        "sponsor": "org",
-        "start_year": "start_year",
-        "condition": "condition",
-        "intervention": "intervention",
-        "study_type": "study_type",
-    }
-
-    if group_by not in key_map:
-        return f"Invalid group_by field: {group_by}. Valid options: phase, status, sponsor, start_year, condition, intervention, study_type"
-
-    col = key_map[group_by]
-
-    # Aggregation
-    if col == "start_year":
-        # Ensure numeric for year
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-        counts = df[col].value_counts().sort_index()
-    elif col == "condition":
-        # Split and explode to count individual conditions
-        # e.g., "Diabetes, Hypertension" -> ["Diabetes", "Hypertension"]
-        counts = df[col].astype(str).str.split(", ").explode().value_counts().head(10)
-    elif col == "intervention":
-        # Split and explode to count individual interventions
-        # Interventions are separated by "; " (semicolon + space)
-        # e.g., "DRUG: A; DRUG: B" -> ["DRUG: A", "DRUG: B"]
-        all_interventions = []
-        for interventions in df[col].dropna():
-            parts = [i.strip() for i in interventions.split(";") if i.strip()]
-            all_interventions.extend(parts)
-        counts = pd.Series(all_interventions).value_counts().head(10)
-    else:
-        # Top 10 for categorical fields
-        counts = df[col].value_counts().head(10)
-
-    summary = counts.to_string()
-
-    # --- Generate Chart Data ---
-    # Standardize column names to ensure Altair works consistently
-    chart_df = counts.reset_index()
-    chart_df.columns = ["category", "count"]  # Force standard names
-    
-    chart_data = {
-        "type": "bar",
-        "title": f"Studies by {group_by.capitalize()}",
-        "data": chart_df.to_dict("records"),
-        "x": "category",
-        "y": "count",
-    }
-
-    # Store in session state for the UI to pick up
-    # This allows the tool (backend) to trigger a UI update (frontend)
-    if "inline_chart_data" not in st.session_state:
-        st.session_state["inline_chart_data"] = chart_data
-    else:
-        st.session_state["inline_chart_data"] = chart_data
-
-    return f"Found {len(df)} studies. Top counts:\n{summary}\n\n(Chart generated in UI)"
+    return fetch_study_analytics_data(
+        query=query,
+        group_by=group_by,
+        phase=phase,
+        status=status,
+        sponsor=sponsor,
+        intervention=intervention,
+        start_year=start_year,
+        study_type=study_type,
+    )
 
 
 @langchain_tool("compare_studies")
