@@ -18,6 +18,13 @@ from llama_index.llms.gemini import Gemini
 from llama_index.core.schema import NodeWithScore
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 import chromadb
+from dotenv import load_dotenv
+
+
+def load_environment():
+    """Loads environment variables from .env file."""
+    load_dotenv()
+
 
 
 # --- Configuration ---

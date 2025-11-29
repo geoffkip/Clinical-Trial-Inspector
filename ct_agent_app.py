@@ -30,6 +30,7 @@ from modules.tools import (
     compare_studies,
     get_study_details,
 )
+from modules.cohort_tools import get_cohort_sql
 from modules.graph_viz import build_graph
 from streamlit_agraph import agraph
 from streamlit_option_menu import option_menu
@@ -89,6 +90,7 @@ def get_agent():
         get_study_analytics,
         compare_studies,
         get_study_details,
+        get_cohort_sql,
     ]
 
     prompt = ChatPromptTemplate.from_messages(
@@ -105,6 +107,8 @@ def get_agent():
                 "If the user asks for a specific study by ID (e.g., NCT12345678), `search_trials` handles that automatically. "
                 "However, if the user asks for specific **details**, **criteria**, **summary**, or **protocol** of a single study, "
                 "you MUST use the `get_study_details` tool to fetch the full content. "
+                "If the user asks to **generate SQL**, **build a cohort**, or **translate criteria to code** for a study, "
+                "use the `get_cohort_sql` tool. "
                 "When reporting 'similar studies', ALWAYS include the similarity score provided by the tool "
                 "and DO NOT include the study that was used as the query (the reference study). "
                 "Provide concise, evidence-based answers citing specific studies when possible.",

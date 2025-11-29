@@ -57,6 +57,13 @@ The agent is equipped with specialized tools to handle different types of reques
 *   **Purpose**: Fetches the full text content of a specific study by NCT ID.
 *   **Capabilities**: Retrieves all chunks of a study to provide comprehensive details (Criteria, Summary, Protocol).
 
+### 6. `get_cohort_sql`
+*   **Purpose**: Translates clinical trial eligibility criteria into standard SQL queries for claims data analysis.
+*   **Capabilities**:
+    *   **Extraction**: Parses text into structured inclusion/exclusion rules (Concepts, Codes).
+    *   **SQL Generation**: Generates OMOP-compatible SQL queries targeting `medical_claims` and `pharmacy_claims`.
+    *   **Logic Enforcement**: Applies temporal logic (e.g., "2 diagnoses > 30 days apart") for chronic conditions.
+
 ## ⚙️ How It Works (RAG Pipeline)
 
 1.  **Ingestion**: `ingest_ct.py` fetches study data from ClinicalTrials.gov. It extracts rich text (including **Eligibility Criteria** and **Interventions**) and structured metadata. It uses **multiprocessing** for speed.
