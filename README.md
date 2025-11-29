@@ -1,23 +1,69 @@
-# Clinical Trial Detective 🕵️‍♂️💊
+# Clinical Trial Inspector Agent 🕵️‍♂️💊
 
-**Clinical Trial Detective** is an intelligent AI agent designed to help researchers, clinicians, and curious minds explore and analyze clinical trial data from [ClinicalTrials.gov](https://clinicaltrials.gov/).
+**Clinical Trial Inspector** is an advanced AI agent designed to revolutionize how researchers, clinicians, and analysts explore clinical trial data. By combining **Semantic Search**, **Retrieval-Augmented Generation (RAG)**, and **Visual Analytics**, it transforms raw data from [ClinicalTrials.gov](https://clinicaltrials.gov/) into actionable insights.
 
-Built with **LangChain**, **LlamaIndex**, **Streamlit**, and **Google Gemini**, this tool allows you to search for studies using natural language, filter by specific criteria, visualize trends, and get synthesized insights.
+Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, and **Google Gemini**, this tool goes beyond simple keyword search. It understands natural language, generates inline visualizations, and performs complex multi-dimensional analysis on the entire dataset.
 
-## ✨ Features
+## ✨ Key Features
 
-- **Natural Language Search**: Ask questions like "Find Phase 3 Pfizer studies for diabetes started after 2022" instead of using complex search forms.
-- **Advanced RAG Pipeline**: Powered by **LlamaIndex** for robust document indexing and retrieval.
-- **Smart Filtering**: The agent uses a hybrid approach (database + post-processing) to strictly filter results by **Year**, **Phase**, **Sponsor**, and **Status** based on your natural language query.
-- **Analytics Dashboard**: Visualize search results with charts for **Phase Distribution**, **Top Sponsors**, and **Yearly Trends**.
-- **Data Export**: Download your search results as a CSV file for further analysis.
-- **Comprehensive Data**: Ingests detailed study information including **Summaries**, **Outcomes**, **Eligibility Criteria**, **Conditions**, **Locations**, and **Study Population**.
-- **Local Vector Store**: Uses **ChromaDB** with **PubMedBERT** embeddings (`pritamdeka/S-PubMedBert-MS-MARCO`) for clinical-specific semantic search.
-- **AI Synthesis**: Powered by **Google Gemini (gemini-2.5-flash)** to summarize findings, compare studies, and answer follow-up questions.
+### 🧠 Intelligent Search & RAG
+- **Natural Language Queries**: Ask complex questions like *"Find Phase 3 Pfizer studies for diabetes started after 2022"* or *"What are the inclusion criteria for recent Moderna trials?"*.
+- **Semantic Understanding**: Powered by **PubMedBERT** embeddings (`pritamdeka/S-PubMedBert-MS-MARCO`) to understand medical context better than keyword matching.
+- **AI Synthesis**: **Google Gemini (gemini-2.5-flash)** summarizes findings, compares studies, and answers follow-up questions with citations.
+
+### 📊 Visual Analytics & Insights
+- **Inline Charts (Contextual)**: The agent automatically generates **Bar Charts** and **Line Charts** directly in the chat stream when you ask aggregation questions (e.g., *"Top sponsors for Multiple Myeloma"*).
+- **Sidebar Dashboard (Global)**: The "Analytics & Export" sidebar provides a high-level view of the **entire dataset** (60,000+ studies). It is always available and independent of your current chat query, allowing you to explore global trends while conversing.
+- **Precise Formatting**: Year-based trends are displayed with precision (e.g., "2023") using **Altair**.
+
+### 🔍 Multi-Filter Analysis
+- **Complex Filtering**: Answer sophisticated questions by applying multiple filters simultaneously.
+    - *Example*: *"For **Phase 2 and 3** studies, what are **Pfizer's** most common study indications?"*
+- **Full Dataset Scope**: General analytics questions (e.g., *"Who are the top sponsors in the dataset?"*) analyze the **entire 60,000+ study database**, not just a sample.
+- **Smart Retrieval**: For specific queries, the agent retrieves up to **5,000 relevant studies** to ensure comprehensive analysis.
+
+### 📂 Comprehensive Data Management
+- **Raw Data Export**: View and download the full dataset as a CSV, including **NCT ID**, **Title**, **Sponsor**, **Phase**, and **Conditions**.
+- **Local Vector Store**: Efficiently stores and retrieves tens of thousands of studies using **ChromaDB**.
+
+## 🤖 Agent Capabilities & Tools
+
+The agent is equipped with specialized tools to handle different types of requests:
+
+### 1. `search_trials`
+*   **Purpose**: Finds specific clinical trials based on natural language queries.
+*   **Capabilities**:
+    *   **Semantic Search**: Uses vector embeddings to find relevant studies even if keywords don't match exactly.
+    *   **Smart Filtering**: Automatically extracts filters for **Phase**, **Status**, and **Sponsor** from your query (e.g., "Recruiting Phase 3 studies by Moderna").
+    *   **Limit**: Returns the top 50 most relevant results for detailed inspection.
+
+### 2. `get_study_analytics`
+*   **Purpose**: Aggregates data to reveal trends and insights.
+*   **Capabilities**:
+    *   **Multi-Filtering**: Can filter by **Phase**, **Status**, and **Sponsor** *before* aggregation (e.g., "Phase 2 studies by Pfizer").
+    *   **Full Dataset Access**: For general questions (e.g., "Top sponsors overall"), it scans the entire 60,000+ study database.
+    *   **Visuals**: Triggers inline **Bar** and **Line** charts in the chat.
+
+### 3. `find_similar_studies`
+*   **Purpose**: Discovers studies that are semantically similar to a specific trial.
+*   **Capabilities**:
+    *   **Vector Similarity**: Calculates cosine similarity between study descriptions.
+    *   **Contextual**: Great for finding "more like this" when you've identified a study of interest.
+
+## ⚙️ How It Works (RAG Pipeline)
+
+1.  **Ingestion**: `ingest_ct.py` fetches study data from ClinicalTrials.gov. It creates a rich text representation of each study (Title, Summary, Criteria) and extracts structured metadata (Phase, Sponsor, Status).
+2.  **Embedding**: The text is converted into vector embeddings using `PubMedBERT`, a model optimized for biomedical text. These vectors are stored locally in **ChromaDB**.
+3.  **Retrieval (Hybrid Search)**: The agent uses a multi-stage retrieval process to ensure both semantic relevance and strict criteria matching:
+    *   **Semantic Search**: Your query is embedded and compared against the database to find conceptually similar studies (e.g., "heart failure" matches "cardiac insufficiency").
+    *   **Pre-Retrieval Filtering**: Strict filters (Status, Year, NCT ID) are applied *before* vector search to narrow the search space efficiently.
+    *   **Post-Retrieval Filtering**: Complex logic (e.g., "Phase 2 or 3", Sponsor aliases) is applied *after* fetching candidates to ensure precision.
+    *   **Re-Ranking**: A Cross-Encoder model (`ms-marco-MiniLM`) re-scores the final results to rank the most relevant studies at the top.
+4.  **Synthesis**: The top relevant studies are passed to **Google Gemini**, which synthesizes the information to answer your specific question, citing the source studies.
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: Streamlit
+- **Frontend**: Streamlit, Altair
 - **LLM**: Google Gemini (`gemini-2.5-flash`)
 - **Orchestration**: LangChain (Agents, Tool Calling)
 - **Retrieval (RAG)**: LlamaIndex (VectorStoreIndex, QueryEngine)
@@ -59,23 +105,15 @@ Built with **LangChain**, **LlamaIndex**, **Streamlit**, and **Google Gemini**, 
 ## 📖 Usage
 
 ### 1. Ingest Data
-Before running the agent, you need to populate the local database with clinical trial data.
-This script fetches the latest studies from ClinicalTrials.gov and embeds them into ChromaDB using LlamaIndex.
+Before running the agent, populate the local database. The ingestion script fetches studies from ClinicalTrials.gov and builds the vector index.
 
 ```bash
-# Ingest 2000 studies from the last 5 years (default: COMPLETED, PHASE2/3)
-python ingest_ct.py
+# Recommended: Ingest 5000 recent studies
+python ingest_ct.py --limit 5000 --years 5
 
-# Ingest with custom status and phases
-python ingest_ct.py --status RECRUITING,COMPLETED --phases PHASE3
-
-# Ingest 5000 studies from the last 10 years
-python ingest_ct.py --limit 5000 --years 10
-
-# Ingest ALL studies (Warning: Takes a long time!)
+# Ingest ALL studies (Warning: Large download!)
 python ingest_ct.py --limit -1
 ```
-*Note: The first run will download the embedding model (~400MB).*
 
 ### 2. Run the Agent
 Launch the Streamlit application:
@@ -87,17 +125,19 @@ streamlit run ct_agent_app.py
 The app will open in your browser at `http://localhost:8501`.
 
 ### 3. Ask Questions!
-Try queries like:
-- *"What are the inclusion criteria for recent Moderna trials?"*
-- *"Compare the Phase 3 studies for lung cancer."*
-- *"Find recruiting studies for Alzheimer's in the US."*
+Try these queries to see the agent in action:
+
+- **Search**: *"Find recruiting studies for Alzheimer's in the US."*
+- **Analytics**: *"Who are the top sponsors for Breast Cancer?"* (Triggers Inline Chart)
+- **Multi-Filter**: *"For Phase 3 studies, what are the top conditions studied by Merck?"*
+- **Trends**: *"How has the number of gene therapy studies changed over time?"*
 
 ## 📂 Project Structure
 
-- `ct_agent_app.py`: Main Streamlit application, LangChain agent, and LlamaIndex retrieval logic.
-- `ingest_ct.py`: Script to fetch data from CT.gov and build the LlamaIndex vector store.
-- `ct_gov_index/`: Directory where the LlamaIndex/ChromaDB data is persisted.
-- `requirements.txt`: Python dependencies.
+- `ct_agent_app.py`: Main application logic, including the LangChain agent, Streamlit UI, and Analytics tools.
+- `ingest_ct.py`: Data pipeline script for fetching, processing, and embedding ClinicalTrials.gov data.
+- `ct_gov_index/`: Persisted ChromaDB vector store.
+- `requirements.txt`: Project dependencies.
 
 ## ⚠️ Note on Quotas
-This project uses the free tier of Google Gemini API, which has rate limits. If you encounter a "ResourceExhausted" error, please wait a minute before retrying.
+This project uses the free tier of Google Gemini API. If you encounter a "ResourceExhausted" error, please wait a minute before retrying.
