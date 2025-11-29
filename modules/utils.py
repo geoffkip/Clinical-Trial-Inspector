@@ -111,6 +111,71 @@ def normalize_sponsor(sponsor: str) -> Optional[str]:
     return sponsor
 
 
+def get_sponsor_variations(sponsor: str) -> Optional[List[str]]:
+    """
+    Returns a list of exact database 'org' values for a given sponsor alias.
+    This enables strict pre-filtering using the IN operator.
+    """
+    if not sponsor:
+        return None
+
+    s = sponsor.lower().strip()
+
+    # Hardcoded mapping based on DB analysis
+    # This can be expanded or moved to a config file/DB later
+    mappings = {
+        "pfizer": ["Pfizer"],
+        "janssen": [
+            "Janssen Research & Development, LLC",
+            "Janssen Vaccines & Prevention B.V.",
+            "Janssen Pharmaceutical K.K.",
+            "Janssen-Cilag International NV",
+            "Janssen Sciences Ireland UC",
+            "Janssen Pharmaceutica N.V., Belgium",
+            "Janssen Scientific Affairs, LLC",
+            "Janssen-Cilag Ltd.",
+            "Xian-Janssen Pharmaceutical Ltd.",
+            "Janssen Korea, Ltd., Korea",
+            "Janssen-Cilag G.m.b.H",
+            "Janssen-Cilag, S.A.",
+            "Janssen BioPharma, Inc.",
+        ],
+        "j&j": [
+            "Janssen Research & Development, LLC",
+            "Janssen Vaccines & Prevention B.V.",
+            "Janssen Pharmaceutical K.K.",
+            "Janssen-Cilag International NV",
+            "Janssen Sciences Ireland UC",
+            "Janssen Pharmaceutica N.V., Belgium",
+            "Janssen Scientific Affairs, LLC",
+            "Janssen-Cilag Ltd.",
+            "Xian-Janssen Pharmaceutical Ltd.",
+            "Janssen Korea, Ltd., Korea",
+            "Janssen-Cilag G.m.b.H",
+            "Janssen-Cilag, S.A.",
+            "Janssen BioPharma, Inc.",
+        ],
+        "merck": ["Merck Sharp & Dohme LLC"],  # Based on analyze_db output
+        "msd": ["Merck Sharp & Dohme LLC"],
+        "astrazeneca": ["AstraZeneca"],
+        "lilly": ["Eli Lilly and Company"],
+        "eli lilly": ["Eli Lilly and Company"],
+        "bms": ["Bristol-Myers Squibb"],
+        "bristol": ["Bristol-Myers Squibb"],
+        "bristol myers squibb": ["Bristol-Myers Squibb"],
+        "sanofi": ["Sanofi"],
+        "novartis": ["Novartis"],
+        "gsk": ["GlaxoSmithKline"],
+        "glaxo": ["GlaxoSmithKline"],
+    }
+
+    for key, variations in mappings.items():
+        if key in s:
+            return variations
+
+    return None
+
+
 # --- Custom Filters ---
 class LocalMetadataPostFilter(BaseNodePostprocessor):
     """
@@ -125,21 +190,9 @@ class LocalMetadataPostFilter(BaseNodePostprocessor):
         sponsor (Optional[str]): Sponsor name to filter by (fuzzy match).
     """
 
-    def __init__(
-        self,
-        phase: Optional[str] = None,
-        sponsor: Optional[str] = None,
-        intervention: Optional[str] = None,
-    ):
-        self.phase = phase
-        self.sponsor = sponsor
-        self.intervention = intervention
-
-    def postprocess_nodes(
-        self, nodes: List[NodeWithScore], query_bundle=None
-    ) -> List[NodeWithScore]:
-        """Public interface for LlamaIndex."""
-        return self._postprocess_nodes(nodes, query_bundle)
+    phase: Optional[str] = None
+    sponsor: Optional[str] = None
+    intervention: Optional[str] = None
 
     def _postprocess_nodes(
         self, nodes: List[NodeWithScore], query_bundle=None

@@ -2,12 +2,30 @@
 Script to remove duplicate NCT IDs from the ChromaDB collection.
 
 This script scans the 'clinical_trials' collection, identifies records with duplicate 'nct_id' metadata,
-and removes the extras, keeping only one instance per NCT ID.
+and removes the extras, keeping the one with the most metadata (richness score).
 """
 
 import chromadb
 import os
 from collections import defaultdict
+
+
+def calculate_richness(metadata):
+    """Calculates a 'richness' score for a metadata dict based on field count and content length."""
+    score = 0
+    if not metadata:
+        return 0
+
+    for key, value in metadata.items():
+        # Check for non-empty values
+        if value is not None and str(value).strip() != "":
+            score += 10  # Base points for having a populated field
+
+            # Bonus points for content length (e.g. longer descriptions are better)
+            if isinstance(value, str):
+                score += len(value) / 100.0
+
+    return score
 
 
 def remove_duplicates():
@@ -36,12 +54,12 @@ def remove_duplicates():
             print("Database is empty.")
             return
 
-        # Map NCT ID -> List of Chroma IDs
+        # Map NCT ID -> List of (Chroma ID, Metadata)
         nct_map = defaultdict(list)
         for i, meta in enumerate(metadatas):
             nct_id = meta.get("nct_id")
             if nct_id:
-                nct_map[nct_id].append(ids[i])
+                nct_map[nct_id].append((ids[i], meta))
 
         # Identify duplicates
         duplicates = {k: v for k, v in nct_map.items() if len(v) > 1}
@@ -53,14 +71,23 @@ def remove_duplicates():
         print(f"⚠️ Found {len(duplicates)} NCT IDs with duplicate records.")
 
         ids_to_delete = []
-        for nct_id, chroma_ids in duplicates.items():
-            # Keep the first one, delete the rest
-            # In a more advanced version, we could check which one has more data,
-            # but usually they are identical.
+        for nct_id, records in duplicates.items():
+            # Sort records by richness score (descending)
+            # records is a list of tuples: (chroma_id, metadata)
+            records.sort(key=lambda x: calculate_richness(x[1]), reverse=True)
+
+            best_record = records[0]
+            extras = records[1:]
+
+            best_score = calculate_richness(best_record[1])
+
             print(
-                f"   - {nct_id}: Found {len(chroma_ids)} copies. Removing {len(chroma_ids) - 1}."
+                f"   - {nct_id}: Found {len(records)} copies. "
+                f"Keeping {best_record[0]} (Score: {best_score:.1f}). "
+                f"Removing {len(extras)}."
             )
-            ids_to_delete.extend(chroma_ids[1:])
+
+            ids_to_delete.extend([r[0] for r in extras])
 
         if ids_to_delete:
             print(f"🗑️ Deleting {len(ids_to_delete)} duplicate records...")

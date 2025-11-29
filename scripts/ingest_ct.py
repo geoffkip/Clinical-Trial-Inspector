@@ -74,7 +74,7 @@ def fetch_trials_generator(
 
     # Calculate start date for filtering
     start_date = (datetime.now() - timedelta(days=365 * years)).strftime("%Y-%m-%d")
-    print(f"📡 Connecting to CT.gov API...")
+    print("📡 Connecting to CT.gov API...")
     print(f"🔎 Fetching trials starting after: {start_date}")
     if status:
         print(f"   Filters - Status: {status}")
@@ -111,7 +111,26 @@ def fetch_trials_generator(
             "query.term": full_query,
             "pageSize": current_limit,
             # Request specific fields to minimize payload size
-            "fields": "protocolSection.identificationModule.nctId,protocolSection.identificationModule.briefTitle,protocolSection.identificationModule.officialTitle,protocolSection.identificationModule.organization,protocolSection.statusModule.overallStatus,protocolSection.statusModule.startDateStruct,protocolSection.statusModule.completionDateStruct,protocolSection.designModule.phases,protocolSection.designModule.studyType,protocolSection.eligibilityModule.eligibilityCriteria,protocolSection.eligibilityModule.sex,protocolSection.eligibilityModule.stdAges,protocolSection.descriptionModule.briefSummary,protocolSection.conditionsModule.conditions,protocolSection.outcomesModule.primaryOutcomes,protocolSection.contactsLocationsModule.locations",
+            "fields": ",".join(
+                [
+                    "protocolSection.identificationModule.nctId",
+                    "protocolSection.identificationModule.briefTitle",
+                    "protocolSection.identificationModule.officialTitle",
+                    "protocolSection.identificationModule.organization",
+                    "protocolSection.statusModule.overallStatus",
+                    "protocolSection.statusModule.startDateStruct",
+                    "protocolSection.statusModule.completionDateStruct",
+                    "protocolSection.designModule.phases",
+                    "protocolSection.designModule.studyType",
+                    "protocolSection.eligibilityModule.eligibilityCriteria",
+                    "protocolSection.eligibilityModule.sex",
+                    "protocolSection.eligibilityModule.stdAges",
+                    "protocolSection.descriptionModule.briefSummary",
+                    "protocolSection.conditionsModule.conditions",
+                    "protocolSection.outcomesModule.primaryOutcomes",
+                    "protocolSection.contactsLocationsModule.locations",
+                ]
+            ),
         }
 
         if next_page_token:

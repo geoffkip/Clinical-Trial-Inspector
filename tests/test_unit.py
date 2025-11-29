@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 # Add project root to path to import app modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from modules.utils import normalize_sponsor, KeywordBoostingPostProcessor
-from modules.tools import expand_query
-from modules.graph_viz import build_graph
-from llama_index.core.schema import NodeWithScore, TextNode
+from modules.utils import normalize_sponsor, KeywordBoostingPostProcessor  # noqa: E402
+from modules.tools import expand_query  # noqa: E402
+from modules.graph_viz import build_graph  # noqa: E402
+from llama_index.core.schema import NodeWithScore, TextNode  # noqa: E402
 
 # --- Tests for normalize_sponsor ---
 

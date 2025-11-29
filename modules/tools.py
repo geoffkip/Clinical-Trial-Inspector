@@ -284,9 +284,53 @@ def get_study_analytics(
             return f"Error fetching full dataset: {e}"
     else:
         # Semantic Search for specific queries (e.g., "breast cancer")
-        # We fetch a larger set (1000) to get a representative sample.
-        retriever = index.as_retriever(similarity_top_k=1000)
-        nodes = retriever.retrieve(query)
+        # We fetch a larger set (5000) to get a representative sample.
+
+        # Build Pre-Retrieval Filters
+        filters = []
+        if status:
+            filters.append(
+                MetadataFilter(
+                    key="status", value=status.upper(), operator=FilterOperator.EQ
+                )
+            )
+        if phase:
+            # Phase is often comma-separated in the tool input, but Chroma needs exact match or IN.
+            # Since our phases are stored as "PHASE1, PHASE2", exact match is tricky.
+            # We'll skip pre-filtering for Phase unless it's a single value, relying on post-filtering.
+            # This avoids excluding "PHASE2, PHASE3" when filtering for "PHASE2".
+            if "," not in phase:
+                # Only pre-filter if it's a single phase, assuming exact match might work for single-phase studies
+                # But even then, "PHASE1, PHASE2" wouldn't match "PHASE2".
+                # Safer to skip pre-filtering for Phase entirely and rely on Post-Filtering + High Top-K.
+                pass
+
+        # Sponsor Pre-Filtering using Robust Mapping
+        # If we have a known mapping for the sponsor, we use strict IN filtering.
+        # This guarantees we get all relevant records (e.g., all 13 Janssen variations).
+        if sponsor:
+            from modules.utils import get_sponsor_variations
+
+            sponsor_variations = get_sponsor_variations(sponsor)
+            if sponsor_variations:
+                print(
+                    f"🎯 Using strict pre-filter for sponsor '{sponsor}': {len(sponsor_variations)} variations found."
+                )
+                filters.append(
+                    MetadataFilter(
+                        key="org", value=sponsor_variations, operator=FilterOperator.IN
+                    )
+                )
+
+        metadata_filters = MetadataFilters(filters=filters) if filters else None
+
+        # Inject sponsor into query to boost vector search relevance (still useful for ranking)
+        search_query = query
+        if sponsor and sponsor.lower() not in query.lower():
+            search_query = f"{sponsor} {query}"
+
+        retriever = index.as_retriever(similarity_top_k=5000, filters=metadata_filters)
+        nodes = retriever.retrieve(search_query)
         data = [node.metadata for node in nodes]
 
     df = pd.DataFrame(data)
@@ -412,9 +456,16 @@ def compare_studies(query: str):
     )
 
     # Create the SubQuestionQueryEngine
-    # It will use the LLM to break the 'query' into sub-questions that target 'clinical_trials_db'
+    # We explicitly define the question generator to use our configured LLM (Gemini)
+    # This avoids the default behavior which might try to import OpenAI modules
+    from llama_index.core.question_gen import LLMQuestionGenerator
+    from llama_index.core import Settings
+
+    question_gen = LLMQuestionGenerator.from_defaults(llm=Settings.llm)
+
     query_engine = SubQuestionQueryEngine.from_defaults(
         query_engine_tools=[query_tool],
+        question_gen=question_gen,
         use_async=True,
     )
 
@@ -423,3 +474,47 @@ def compare_studies(query: str):
         return str(response)
     except Exception as e:
         return f"Error during comparison: {e}"
+
+
+@langchain_tool("get_study_details")
+def get_study_details(nct_id: str):
+    """
+    Retrieves the full details of a specific clinical trial by its NCT ID.
+
+    Use this tool when the user asks for specific information about a single study,
+    such as "What are the inclusion criteria for NCT12345678?" or "Give me a summary of study NCT...".
+    It returns the full text content of the study document, including criteria, outcomes, and contacts.
+
+    Args:
+        nct_id (str): The NCT ID of the study (e.g., "NCT01234567").
+
+    Returns:
+        str: The full text content of the study, or a message if not found.
+    """
+    index = load_index()
+
+    # Clean the ID
+    clean_id = nct_id.strip().upper()
+
+    # Use a retriever with a strict metadata filter for the ID
+    # We set top_k=20 to capture all chunks if the document was split
+    filters = MetadataFilters(
+        filters=[
+            MetadataFilter(key="nct_id", value=clean_id, operator=FilterOperator.EQ)
+        ]
+    )
+
+    retriever = index.as_retriever(similarity_top_k=20, filters=filters)
+    nodes = retriever.retrieve(clean_id)
+
+    if not nodes:
+        return f"Study {clean_id} not found in the database."
+
+    # Sort nodes by their position in the document to reconstruct full text
+    # LlamaIndex nodes usually have 'start_char_idx' in metadata or relationships
+    # We'll try to sort by node ID or just concatenate them
+
+    # Simple concatenation (assuming retrieval order is roughly correct or sufficient)
+    full_text = "\n\n".join([node.text for node in nodes])
+
+    return f"Details for {clean_id} (Combined {len(nodes)} parts):\n\n{full_text}"

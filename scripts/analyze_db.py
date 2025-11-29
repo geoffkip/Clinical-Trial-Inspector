@@ -92,6 +92,16 @@ def analyze_db():
         else:
             print("⚠️ 'condition' field not found in metadata.")
 
+        print("\n📊 --- Top Interventions ---")
+        if "intervention" in df.columns:
+            # Interventions are comma-separated strings, so we split and explode them
+            all_interventions = []
+            for interventions in df["intervention"].dropna():
+                all_interventions.extend([i.strip() for i in interventions.split(",")])
+            print(pd.Series(all_interventions).value_counts().head(10))
+        else:
+            print("⚠️ 'intervention' field not found in metadata.")
+
         print("\n📝 --- Sample Studies (Most Recent Start Years) ---")
         if "start_year" in df.columns and "title" in df.columns:
             # Ensure start_year is numeric for sorting
@@ -102,6 +112,16 @@ def analyze_db():
                     f"- [{row.get('start_year', 'N/A')}] {row.get('title', 'N/A')} ({row.get('nct_id', 'N/A')})"
                 )
                 print(f"  Sponsor: {row.get('org', 'N/A')}")
+                print(f"  Intervention: {row.get('intervention', 'N/A')}")
+
+        print("\n📊 --- Intervention Check ---")
+        if "intervention" in df.columns:
+            non_empty = df[df["intervention"].str.len() > 0]
+            print(f"Total records with interventions: {len(non_empty)}")
+            if not non_empty.empty:
+                print("Sample Intervention:", non_empty.iloc[0]["intervention"])
+        else:
+            print("⚠️ 'intervention' field not found.")
 
     except Exception as e:
         print(f"⚠️ Error analyzing DB: {e}")

@@ -28,6 +28,7 @@ from modules.tools import (
     find_similar_studies,
     get_study_analytics,
     compare_studies,
+    get_study_details,
 )
 from modules.graph_viz import build_graph
 from streamlit_agraph import agraph
@@ -82,7 +83,13 @@ index = load_index()
 @st.cache_resource
 def get_agent():
     """Initializes and caches the LangChain agent."""
-    tools = [search_trials, find_similar_studies, get_study_analytics, compare_studies]
+    tools = [
+        search_trials,
+        find_similar_studies,
+        get_study_analytics,
+        compare_studies,
+        get_study_details,
+    ]
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -96,6 +103,8 @@ def get_agent():
                 "When asked to 'find studies' or 'search', use `search_trials`. "
                 "When asked to 'compare' multiple studies or answer complex multi-part questions, use `compare_studies`. "
                 "If the user asks for a specific study by ID (e.g., NCT12345678), `search_trials` handles that automatically. "
+                "However, if the user asks for specific **details**, **criteria**, **summary**, or **protocol** of a single study, "
+                "you MUST use the `get_study_details` tool to fetch the full content. "
                 "Provide concise, evidence-based answers citing specific studies when possible.",
             ),
             MessagesPlaceholder(variable_name="chat_history"),
