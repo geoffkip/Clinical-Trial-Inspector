@@ -129,7 +129,10 @@ def fetch_trials_generator(
                     "protocolSection.conditionsModule.conditions",
                     "protocolSection.outcomesModule.primaryOutcomes",
                     "protocolSection.contactsLocationsModule.locations",
+                    "protocolSection.outcomesModule.primaryOutcomes",
+                    "protocolSection.contactsLocationsModule.locations",
                     "protocolSection.armsInterventionsModule",
+                    "protocolSection.sponsorCollaboratorsModule.leadSponsor",
                 ]
             ),
         }
@@ -188,13 +191,18 @@ def process_study(study):
         conditions_module = protocol.get("conditionsModule", {})
         outcomes_module = protocol.get("outcomesModule", {})
         arms_interventions_module = protocol.get("armsInterventionsModule", {})
+        outcomes_module = protocol.get("outcomesModule", {})
+        arms_interventions_module = protocol.get("armsInterventionsModule", {})
         locations_module = protocol.get("contactsLocationsModule", {})
+        sponsor_module = protocol.get("sponsorCollaboratorsModule", {})
 
         # Extract Fields
         nct_id = identification.get("nctId", "N/A")
         title = identification.get("briefTitle", "N/A")
         official_title = identification.get("officialTitle", "N/A")
+        official_title = identification.get("officialTitle", "N/A")
         org = identification.get("organization", {}).get("fullName", "N/A")
+        sponsor_name = sponsor_module.get("leadSponsor", {}).get("name", "N/A")
         summary = clean_text(description.get("briefSummary", "N/A"))
 
         overall_status = status_module.get("overallStatus", "N/A")
@@ -240,7 +248,8 @@ def process_study(study):
             f"# {title}\n"
             f"**NCT ID:** {nct_id}\n"
             f"**Official Title:** {official_title}\n"
-            f"**Sponsor:** {org}\n"
+            f"**Sponsor:** {sponsor_name}\n"
+            f"**Organization:** {org}\n"
             f"**Status:** {overall_status}\n"
             f"**Phase:** {phases}\n"
             f"**Study Type:** {study_type}\n"
@@ -262,6 +271,7 @@ def process_study(study):
             "nct_id": nct_id,
             "title": title,
             "org": org,
+            "sponsor": sponsor_name,
             "status": overall_status,
             "phase": phases,
             "study_type": study_type,

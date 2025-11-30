@@ -400,9 +400,10 @@ def fetch_study_analytics_data(
                 title = meta.get("title", "").lower()
                 conditions = meta.get("condition", "").lower() # Note: key is 'condition' in DB
                 org = meta.get("org", "").lower()
+                sponsor_val = meta.get("sponsor", "").lower()
                 
-                # If it's a sponsor query, we allow matches on the Organization field too
-                if q_term in title or q_term in conditions or (is_sponsor_query and q_term in org):
+                # If it's a sponsor query, we allow matches on the Organization OR Sponsor field
+                if q_term in title or q_term in conditions or (is_sponsor_query and (q_term in org or q_term in sponsor_val)):
                     filtered_nodes.append(node)
             
             print(f"📉 Strict Filter: {len(nodes)} -> {len(filtered_nodes)} nodes for '{query}'")
@@ -430,8 +431,13 @@ def fetch_study_analytics_data(
 
     if sponsor:
         target_sponsor = normalize_sponsor(sponsor).lower()
-        df["org_lower"] = df["org"].astype(str).apply(normalize_sponsor).str.lower()
-        df = df[df["org_lower"].str.contains(target_sponsor, regex=False)]
+        # Use 'sponsor' column if it exists, otherwise fallback to 'org'
+        if "sponsor" in df.columns:
+             df["sponsor_check"] = df["sponsor"].fillna(df["org"]).astype(str).apply(normalize_sponsor).str.lower()
+        else:
+             df["sponsor_check"] = df["org"].astype(str).apply(normalize_sponsor).str.lower()
+             
+        df = df[df["sponsor_check"].str.contains(target_sponsor, regex=False)]
 
     if intervention:
         target_intervention = intervention.lower()
@@ -451,7 +457,7 @@ def fetch_study_analytics_data(
     key_map = {
         "phase": "phase",
         "status": "status",
-        "sponsor": "org",
+        "sponsor": "sponsor" if "sponsor" in df.columns else "org",
         "start_year": "start_year",
         "condition": "condition",
         "intervention": "intervention",
