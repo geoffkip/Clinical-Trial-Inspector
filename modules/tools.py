@@ -26,7 +26,6 @@ from modules.utils import (
     load_index,
     normalize_sponsor,
     get_sponsor_variations,
-    LocalMetadataPostFilter,
     get_hybrid_retriever,
 )
 import re
@@ -55,7 +54,7 @@ def expand_query(query: str) -> str:
     try:
         # Use the global Settings.llm
         if not Settings.llm:
-            # Fallback if not initialized (though load_index does it)
+        # Fallback if not initialized (though load_index does it)
             from modules.utils import setup_llama_index
 
             setup_llama_index()
@@ -117,7 +116,7 @@ def search_trials(
     print(f"🔍 Tool Called: search_trials(query='{query}', sponsor='{sponsor}')")
 
     # --- Strategy 1: Strict Pre-Retrieval Filtering (High Precision) ---
-    # Try to filter by Sponsor/Status/Year at the database level first.
+    # Filter by Sponsor/Status/Year at the database level first.
     pre_filters = []
     
     # NCT ID Match
@@ -131,7 +130,7 @@ def search_trials(
     if year:
         pre_filters.append(MetadataFilter(key="start_year", value=year, operator=FilterOperator.GTE))
         
-    # Sponsor Pre-Filter (The Fix!)
+    # Sponsor Pre-Filter
     if sponsor:
         from modules.utils import get_sponsor_variations
         variations = get_sponsor_variations(sponsor)
@@ -147,12 +146,11 @@ def search_trials(
     reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=50)
     
     # --- HYBRID SEARCH IMPLEMENTATION ---
-    # We use the new get_hybrid_retriever which combines Vector + BM25
+    # Combine Vector + BM25 using get_hybrid_retriever
     try:
         retriever = get_hybrid_retriever(index, similarity_top_k=TOP_K_STRICT, filters=metadata_filters)
         nodes = retriever.retrieve(query)
         
-        # Apply Reranker manually since we are using a retriever, not a query engine
         # (QueryFusionRetriever returns nodes, but we want to rerank them)
         if nodes:
             from llama_index.core.schema import QueryBundle
@@ -170,7 +168,7 @@ def search_trials(
         nodes = response.source_nodes
 
     # --- Strict Metadata Filtering (Post-Fusion) ---
-    # BM25 results might not respect the vector filters, so we must filter them out.
+    # BM25 results might not respect the vector filters, so filter them out.
     final_nodes = []
     for node in nodes:
         meta = node.metadata
@@ -186,9 +184,9 @@ def search_trials(
             except:
                 pass
         if sponsor:
-            # We already have strict logic for sponsor in pre-filters, but BM25 ignores it.
-            # So we check if the sponsor matches one of the variations OR fuzzy match
-            # If we had strict variations, we enforce them.
+            # Strict logic for sponsor in pre-filters is ignored by BM25.
+            # Check if the sponsor matches one of the variations OR fuzzy match
+            # If strict variations exist, enforce them.
             variations = get_sponsor_variations(sponsor)
             node_org = meta.get("org", "")
             if variations:
@@ -204,15 +202,9 @@ def search_trials(
     
     nodes = final_nodes
 
-    # --- Strict Keyword Filtering (Refined) ---
-    # With BM25, we don't need the aggressive "substring check" as much, 
-    # but for "Analytics" consistency, we might still want to prioritize exact title matches.
-    # However, BM25 should handle this naturally. 
-    # We will keep the logic but make it less destructive (just boosting or trusted).
-    # Actually, the user wants "consistent counts". 
-    # If the user searches "Multiple Myeloma", they want studies about that, not just mentioning it.
-    # BM25 is good at this.
-    # We will trust Hybrid Search + Reranker.
+    # --- Strict Keyword Filtering ---
+    # BM25 handles keyword relevance naturally, so rely on the Hybrid Search + Reranker
+    # rather than applying an aggressive substring check here.
     
     # Update response object structure to match expected format if we used retriever
     class MockResponse:
@@ -222,10 +214,8 @@ def search_trials(
     response = MockResponse(nodes)
     
     # --- Strategy 2: Hybrid Search (Fallback) ---
-    # The original code had a fallback. With Hybrid Search enabled by default, 
-    # we might not need a separate fallback unless the strict filters were too aggressive.
-    # But we already handle strict filters in the post-processing above.
-    # So we can simplify.
+    # Hybrid Search is enabled by default.
+    # Strict filters are handled in post-processing above.
 
 
     # --- Formatting Output ---
@@ -285,7 +275,7 @@ def find_similar_studies(query: str):
         print(f"🎯 Detected NCT ID for similarity: {target_nct}")
         
         # Fetch the study content to use as the semantic query
-        # We use the vector store directly to get the text
+        # Use the vector store directly to get the text
         retriever = index.as_retriever(
             filters=MetadataFilters(
                 filters=[MetadataFilter(key="nct_id", value=target_nct, operator=FilterOperator.EQ)]
@@ -387,9 +377,8 @@ def fetch_study_analytics_data(
         retriever = index.as_retriever(similarity_top_k=5000, filters=metadata_filters)
         nodes = retriever.retrieve(search_query)
         
-        # --- Strict Keyword Filtering (Deterministic) ---
-        # We strictly check if the query appears in Title or Conditions.
-        # This is crucial for accurate counting (e.g. "Multiple Myeloma" -> 7 studies vs 514).
+        # --- Strict Keyword Filtering ---
+        # Strictly check if the query appears in Title or Conditions to ensure accurate counting.
         if query.lower() != "overall":
             q_term = query.lower()
             filtered_nodes = []
@@ -557,7 +546,7 @@ def compare_studies(query: str):
     index = load_index()
 
     # Create a base query engine for the sub-questions
-    # We increase top_k and add re-ranking to improve recall for comparison queries
+    # Increase top_k and add re-ranking to improve recall for comparison queries
     reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=10)
     
     base_engine = index.as_query_engine(
@@ -575,7 +564,7 @@ def compare_studies(query: str):
     )
 
     # Create the SubQuestionQueryEngine
-    # We explicitly define the question generator to use our configured LLM (Gemini)
+    # Explicitly define the question generator to use the configured LLM (Gemini)
     # This avoids the default behavior which might try to import OpenAI modules
     from llama_index.core.question_gen import LLMQuestionGenerator
     from llama_index.core import Settings
@@ -616,7 +605,7 @@ def get_study_details(nct_id: str):
     clean_id = nct_id.strip().upper()
 
     # Use a retriever with a strict metadata filter for the ID
-    # We set top_k=20 to capture all chunks if the document was split
+    # Set top_k=20 to capture all chunks if the document was split
     filters = MetadataFilters(
         filters=[
             MetadataFilter(key="nct_id", value=clean_id, operator=FilterOperator.EQ)
@@ -631,7 +620,7 @@ def get_study_details(nct_id: str):
 
     # Sort nodes by their position in the document to reconstruct full text
     # LlamaIndex nodes usually have 'start_char_idx' in metadata or relationships
-    # We'll try to sort by node ID or just concatenate them
+    # Try to sort by node ID or just concatenate them
 
     # Simple concatenation (assuming retrieval order is roughly correct or sufficient)
     full_text = "\n\n".join([node.text for node in nodes])

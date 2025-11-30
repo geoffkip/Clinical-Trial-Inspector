@@ -22,7 +22,8 @@ logging.getLogger("langchain_google_genai._function_utils").setLevel(logging.ERR
 load_dotenv()
 
 # Module Imports
-from modules.utils import load_index, setup_llama_index, COUNTRY_COORDINATES, STATE_COORDINATES
+from modules.utils import load_index, setup_llama_index
+from modules.constants import COUNTRY_COORDINATES, STATE_COORDINATES
 
 # ... (imports)
 from modules.tools import (
