@@ -98,18 +98,8 @@ def get_hybrid_retriever(index: VectorStoreIndex, similarity_top_k: int = 50, fi
     vector_retriever = index.as_retriever(similarity_top_k=similarity_top_k, filters=filters)
 
     # 2. BM25 Retriever
-    # We need to ensure BM25 has access to the nodes.
-    # Since we are loading from a VectorStore, the docstore might be empty in memory.
-    # We'll try to retrieve nodes from the docstore, or fallback to rebuilding from the vector store if needed.
-    # For now, we assume the index (if loaded correctly) provides access to the docstore or we can pass the docstore.
-    # NOTE: If docstore is empty, we might need to fetch all nodes from Chroma.
-    # Let's check if we can get nodes.
-    
-    # Strategy: Use the docstore attached to the index.
-    # If this fails in practice (empty results), we might need to explicitly load nodes.
-    # But typically StorageContext should handle it if persisted.
-    # However, ChromaVectorStore usually doesn't persist the docstore in the same way simple index does.
-    # So we might need to fetch from vector store.
+    # BM25 requires an in-memory index of nodes.
+    # If the docstore is empty (common with ChromaVectorStore), fetch nodes directly from the vector store.
     
     try:
         # Try to get all nodes from the docstore
@@ -119,7 +109,6 @@ def get_hybrid_retriever(index: VectorStoreIndex, similarity_top_k: int = 50, fi
             print("⚠️ Docstore empty. Fetching nodes from Chroma for BM25...")
             try:
                 # Access the underlying Chroma collection
-                # We assume index.vector_store is ChromaVectorStore
                 if hasattr(index.vector_store, "_collection"):
                     result = index.vector_store._collection.get()
                     # result is a dict with 'ids', 'documents', 'metadatas'
