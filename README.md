@@ -7,10 +7,10 @@ Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, **Streamlit
 ## ✨ Key Features
 
 ### 2. 🧠 Intelligent Search & Retrieval
-*   **Hybrid Search**: Combines **Semantic Search** (vector similarity) with **Keyword Boosting** (BM25-style) to find studies that match both the *meaning* and the *specific terms* of your query.
+*   **Hybrid Search**: Combines **Semantic Search** (vector similarity) with **BM25 Keyword Search** (sparse retrieval) using **Reciprocal Rank Fusion (RRF)**. This ensures you find studies that match both the *meaning* (e.g., "kidney cancer" -> "renal cell carcinoma") and *exact terms* (e.g., "NCT04589845", "Teclistamab").
 *   **Smart Filtering**:
     *   **Strict Pre-Filtering**: For specific sponsors (e.g., "Pfizer"), it forces the engine to look *only* at that sponsor's studies first, ensuring 100% recall.
-    *   **Strict Keyword Filtering**: Prioritizes studies where the query explicitly appears in the **Title** or **Conditions**, ensuring high precision for counting questions.
+    *   **Strict Keyword Filtering (Analytics Only)**: For counting questions (e.g., "How many studies..."), the **Analytics Engine** (`get_study_analytics`) prioritizes studies where the query explicitly appears in the **Title** or **Conditions**, ensuring high precision and accurate counts.
 *   **Smart Summary**: Returns a clean, concise list of relevant studies.
 *   **Query Expansion**: Automatically expands your search terms with medical synonyms (e.g., "Heart Attack" -> "Myocardial Infarction").
 *   **Re-Ranking**: Uses a Cross-Encoder (`ms-marco-MiniLM`) to re-score results for maximum relevance.
@@ -181,6 +181,7 @@ streamlit run ct_agent_app.py
 ## 🧪 Testing & Quality
 
 - **Unit Tests**: Run `python -m pytest tests/test_unit.py` to verify core logic.
+- **Hybrid Search Tests**: Run `python -m pytest tests/test_hybrid_search.py` to verify the search engine's precision and recall.
 - **Data Integrity**: Run `python -m unittest tests/test_data_integrity.py` to verify database content against known ground truths.
 - **Linting**: Codebase is formatted with `black` and linted with `flake8`.
 
@@ -196,4 +197,6 @@ streamlit run ct_agent_app.py
     - `analyze_db.py`: Database inspection.
 
 - `ct_gov_index/`: Persisted ChromaDB vector store.
-- `tests/`: Unit tests.
+- `tests/`:
+    - `test_unit.py`: Core logic tests.
+    - `test_hybrid_search.py`: Integration tests for search engine.

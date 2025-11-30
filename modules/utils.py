@@ -15,8 +15,10 @@ from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.gemini import Gemini
-from llama_index.core.schema import NodeWithScore
+from llama_index.core.schema import NodeWithScore, TextNode
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
+from llama_index.retrievers.bm25 import BM25Retriever
+from llama_index.core.retrievers import QueryFusionRetriever
 import chromadb
 from dotenv import load_dotenv
 
@@ -179,6 +181,87 @@ def load_index() -> VectorStoreIndex:
         vector_store, storage_context=storage_context
     )
     return index
+
+
+def get_hybrid_retriever(index: VectorStoreIndex, similarity_top_k: int = 50, filters=None):
+    """
+    Creates a Hybrid Retriever (Vector + BM25) using Reciprocal Rank Fusion.
+    
+    Args:
+        index (VectorStoreIndex): The loaded vector index.
+        similarity_top_k (int): Number of top results to retrieve from EACH retriever.
+        filters (MetadataFilters, optional): Filters to apply to the vector retriever.
+        
+    Returns:
+        QueryFusionRetriever: The combined retriever.
+    """
+    # 1. Vector Retriever
+    vector_retriever = index.as_retriever(similarity_top_k=similarity_top_k, filters=filters)
+
+    # 2. BM25 Retriever
+    # We need to ensure BM25 has access to the nodes.
+    # Since we are loading from a VectorStore, the docstore might be empty in memory.
+    # We'll try to retrieve nodes from the docstore, or fallback to rebuilding from the vector store if needed.
+    # For now, we assume the index (if loaded correctly) provides access to the docstore or we can pass the docstore.
+    # NOTE: If docstore is empty, we might need to fetch all nodes from Chroma.
+    # Let's check if we can get nodes.
+    
+    # Strategy: Use the docstore attached to the index.
+    # If this fails in practice (empty results), we might need to explicitly load nodes.
+    # But typically StorageContext should handle it if persisted.
+    # However, ChromaVectorStore usually doesn't persist the docstore in the same way simple index does.
+    # So we might need to fetch from vector store.
+    
+    try:
+        # Try to get all nodes from the docstore
+        nodes = list(index.docstore.docs.values())
+        if not nodes:
+            # Fallback: Fetch from Chroma directly to build BM25
+            print("⚠️ Docstore empty. Fetching nodes from Chroma for BM25...")
+            try:
+                # Access the underlying Chroma collection
+                # We assume index.vector_store is ChromaVectorStore
+                if hasattr(index.vector_store, "_collection"):
+                    result = index.vector_store._collection.get()
+                    # result is a dict with 'ids', 'documents', 'metadatas'
+                    ids = result["ids"]
+                    documents = result["documents"]
+                    metadatas = result["metadatas"]
+                    
+                    nodes = []
+                    for i, doc_id in enumerate(ids):
+                        text = documents[i]
+                        meta = metadatas[i] if metadatas else {}
+                        node = TextNode(text=text, id_=doc_id, metadata=meta)
+                        nodes.append(node)
+                    
+                    print(f"✅ Reconstructed {len(nodes)} nodes from Chroma for BM25.")
+            except Exception as e:
+                print(f"❌ Failed to fetch from Chroma: {e}")
+            
+        if nodes:
+            bm25_retriever = BM25Retriever.from_defaults(
+                nodes=nodes,
+                similarity_top_k=similarity_top_k
+            )
+        else:
+            # If we can't build BM25, return just vector retriever
+            print("⚠️ Could not build BM25 index (no nodes found). Returning Vector Retriever only.")
+            return vector_retriever
+
+    except Exception as e:
+        print(f"⚠️ Error building BM25 retriever: {e}. Returning Vector Retriever only.")
+        return vector_retriever
+
+    # 3. Fusion
+    return QueryFusionRetriever(
+        [vector_retriever, bm25_retriever],
+        similarity_top_k=similarity_top_k,
+        num_queries=1,  # No query generation, just use the original query
+        mode="reciprocal_rerank",
+        use_async=True,
+        verbose=True,
+    )
 
 
 # --- Normalization ---
@@ -352,43 +435,4 @@ class LocalMetadataPostFilter(BaseNodePostprocessor):
         return new_nodes
 
 
-class KeywordBoostingPostProcessor(BaseNodePostprocessor):
-    """
-    Boosts the score of nodes that contain exact keyword matches in the Title or NCT ID.
-    This mimics BM25 behavior by rewarding exact surface form matches.
-    """
 
-    def postprocess_nodes(
-        self, nodes: List[NodeWithScore], query_bundle=None
-    ) -> List[NodeWithScore]:
-        return self._postprocess_nodes(nodes, query_bundle)
-
-    def _postprocess_nodes(
-        self, nodes: List[NodeWithScore], query_bundle=None
-    ) -> List[NodeWithScore]:
-        if not query_bundle:
-            return nodes
-
-        query_terms = [t.lower() for t in query_bundle.query_str.split() if len(t) > 3]
-
-        for node in nodes:
-            metadata = node.node.metadata
-            title = str(metadata.get("title", "")).lower()
-            nct_id = str(metadata.get("nct_id", "")).lower()
-
-            # Simple boosting logic
-            for term in query_terms:
-                if term in title:
-                    node.score *= 1.1  # 10% boost for title match
-                if term in nct_id:
-                    node.score *= 1.5  # 50% boost for ID match
-
-        # Re-sort by new score
-        nodes.sort(key=lambda x: x.score, reverse=True)
-        return nodes
-
-    def __call__(
-        self, nodes: List[NodeWithScore], query_bundle=None
-    ) -> List[NodeWithScore]:
-        """Callable interface for LlamaIndex post-processors."""
-        return self._postprocess_nodes(nodes, query_bundle)

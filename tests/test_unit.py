@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 # Add project root to path to import app modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from modules.utils import normalize_sponsor, KeywordBoostingPostProcessor  # noqa: E402
+from modules.utils import normalize_sponsor  # noqa: E402
 from modules.tools import expand_query  # noqa: E402
 from modules.graph_viz import build_graph  # noqa: E402
 from llama_index.core.schema import NodeWithScore, TextNode  # noqa: E402
@@ -115,39 +115,7 @@ def test_expand_query_skip_long():
     assert expand_query(long_query) == long_query
 
 
-# --- Tests for Keyword Boosting ---
 
-
-def test_keyword_boosting():
-    processor = KeywordBoostingPostProcessor()
-
-    # Create mock nodes
-    node1 = NodeWithScore(
-        node=TextNode(
-            text="t1", metadata={"title": "Study of Cancer", "nct_id": "NCT001"}
-        ),
-        score=0.5,
-    )
-    node2 = NodeWithScore(
-        node=TextNode(
-            text="t2", metadata={"title": "Diabetes Study", "nct_id": "NCT002"}
-        ),
-        score=0.5,
-    )
-
-    nodes = [node1, node2]
-
-    # Query matches title of node1 ("Cancer")
-    mock_query_bundle = MagicMock()
-    mock_query_bundle.query_str = "Cancer treatment"
-
-    processed_nodes = processor.postprocess_nodes(nodes, query_bundle=mock_query_bundle)
-
-    # Node 1 should be boosted (0.5 * 1.1 = 0.55)
-    # Node 2 should stay same (0.5)
-    assert processed_nodes[0].node.metadata["nct_id"] == "NCT001"
-    assert processed_nodes[0].score > 0.5
-    assert processed_nodes[1].score == 0.5
 
 
 # --- Tests for Graph Visualization ---

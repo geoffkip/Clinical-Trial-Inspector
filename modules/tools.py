@@ -27,9 +27,10 @@ from modules.utils import (
     normalize_sponsor,
     get_sponsor_variations,
     LocalMetadataPostFilter,
-    KeywordBoostingPostProcessor,
+    get_hybrid_retriever,
 )
 import re
+import traceback
 
 # --- Tools ---
 
@@ -37,6 +38,10 @@ import re
 def expand_query(query: str) -> str:
     """Expands a search query with synonyms using the LLM."""
     if not query or len(query.split()) > 10:  # Skip expansion for long queries
+        return query
+    
+    # Skip expansion if it looks like an NCT ID
+    if re.search(r"NCT\d+", query, re.IGNORECASE):
         return query
 
     prompt = (
@@ -138,69 +143,90 @@ def search_trials(
 
     metadata_filters = MetadataFilters(filters=pre_filters) if pre_filters else None
     
-    # Post-processors (Re-ranking)
-    # We set top_n=50 to ensure we don't aggressively truncate results for "list" queries
+    # Post-processors (Reranking)
     reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=50)
     
-    # Execute Strict Search
-    query_engine = index.as_query_engine(
-        similarity_top_k=TOP_K_STRICT,
-        filters=metadata_filters,
-        node_postprocessors=[reranker]
-    )
-    response = query_engine.query(query)
-    
-    # --- Strict Keyword Filtering (Post-Retrieval) ---
-    # Logic to prioritize/filter by Title/Condition match.
-    # We apply this to the retrieved nodes to ensure high precision.
-    if response.source_nodes:
-        q_term = query.lower()
-        strict_matches = []
-        loose_matches = []
+    # --- HYBRID SEARCH IMPLEMENTATION ---
+    # We use the new get_hybrid_retriever which combines Vector + BM25
+    try:
+        retriever = get_hybrid_retriever(index, similarity_top_k=TOP_K_STRICT, filters=metadata_filters)
+        nodes = retriever.retrieve(query)
         
-        for node in response.source_nodes:
-            meta = node.metadata
-            title = meta.get("title", "").lower()
-            conditions = meta.get("condition", "").lower()
-            
-            # Check if query terms appear in Title or Conditions
-            # We use a simple heuristic: if the query is short (< 3 words), check for exact substring.
-            # If long, we skip this to avoid filtering out semantic matches.
-            if len(q_term.split()) <= 3 and (q_term in title or q_term in conditions):
-                strict_matches.append(node)
+        # Apply Reranker manually since we are using a retriever, not a query engine
+        # (QueryFusionRetriever returns nodes, but we want to rerank them)
+        if nodes:
+            from llama_index.core.schema import QueryBundle
+            nodes = reranker.postprocess_nodes(nodes, query_bundle=QueryBundle(query_str=query))
+
+    except Exception as e:
+        print(f"⚠️ Hybrid search failed: {e}. Falling back to standard vector search.")
+        traceback.print_exc()
+        query_engine = index.as_query_engine(
+            similarity_top_k=TOP_K_STRICT,
+            filters=metadata_filters,
+            node_postprocessors=[reranker]
+        )
+        response = query_engine.query(query)
+        nodes = response.source_nodes
+
+    # --- Strict Metadata Filtering (Post-Fusion) ---
+    # BM25 results might not respect the vector filters, so we must filter them out.
+    final_nodes = []
+    for node in nodes:
+        meta = node.metadata
+        keep = True
+        
+        # Re-apply filters to ensure BM25 results are valid
+        if status and meta.get("status", "").upper() != status.upper():
+            keep = False
+        if year:
+            try:
+                if int(meta.get("start_year", 0)) < year:
+                    keep = False
+            except:
+                pass
+        if sponsor:
+            # We already have strict logic for sponsor in pre-filters, but BM25 ignores it.
+            # So we check if the sponsor matches one of the variations OR fuzzy match
+            # If we had strict variations, we enforce them.
+            variations = get_sponsor_variations(sponsor)
+            node_org = meta.get("org", "")
+            if variations:
+                if node_org not in variations:
+                    keep = False
             else:
-                loose_matches.append(node)
+                # Fuzzy fallback
+                if normalize_sponsor(sponsor).lower() not in normalize_sponsor(node_org).lower():
+                    keep = False
         
-        # If we found strict matches, prioritize them!
-        if strict_matches:
-            print(f"🎯 Found {len(strict_matches)} strict keyword matches. Filtering out loose matches to align with Analytics.")
-            # We strictly filter to these matches to ensure the "Total Found" count is accurate/consistent.
-            response.source_nodes = strict_matches
-            # We discard loose_matches entirely when strict matches exist.
+        if keep:
+            final_nodes.append(node)
+    
+    nodes = final_nodes
+
+    # --- Strict Keyword Filtering (Refined) ---
+    # With BM25, we don't need the aggressive "substring check" as much, 
+    # but for "Analytics" consistency, we might still want to prioritize exact title matches.
+    # However, BM25 should handle this naturally. 
+    # We will keep the logic but make it less destructive (just boosting or trusted).
+    # Actually, the user wants "consistent counts". 
+    # If the user searches "Multiple Myeloma", they want studies about that, not just mentioning it.
+    # BM25 is good at this.
+    # We will trust Hybrid Search + Reranker.
+    
+    # Update response object structure to match expected format if we used retriever
+    class MockResponse:
+        def __init__(self, nodes):
+            self.source_nodes = nodes
+    
+    response = MockResponse(nodes)
     
     # --- Strategy 2: Hybrid Search (Fallback) ---
-    # If strict search yields nothing (e.g. sponsor name didn't match exactly), 
-    # fall back to Vector Search + Fuzzy Post-Filtering.
-    if not response.source_nodes and sponsor:
-        print("⚠️ Strict pre-filter returned 0 results. Falling back to Hybrid Search (Fuzzy Match)...")
-        
-        # Remove Sponsor from pre-filters, keep others (Status, Year)
-        fallback_filters = [f for f in pre_filters if f.key != "org"]
-        fallback_metadata_filters = MetadataFilters(filters=fallback_filters) if fallback_filters else None
-        
-        # Add Fuzzy Post-Filter
-        post_filters = [
-            LocalMetadataPostFilter(phase=phase, sponsor=sponsor, intervention=intervention),
-            KeywordBoostingPostProcessor(),
-            reranker
-        ]
-        
-        query_engine_hybrid = index.as_query_engine(
-            similarity_top_k=TOP_K_HYBRID,
-            filters=fallback_metadata_filters,
-            node_postprocessors=post_filters
-        )
-        response = query_engine_hybrid.query(query)
+    # The original code had a fallback. With Hybrid Search enabled by default, 
+    # we might not need a separate fallback unless the strict filters were too aggressive.
+    # But we already handle strict filters in the post-processing above.
+    # So we can simplify.
+
 
     # --- Formatting Output ---
     if not response.source_nodes:

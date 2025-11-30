@@ -16,3 +16,5 @@ streamlit-option-menu
 streamlit-agraph
 folium
 streamlit-folium
+rank_bm25
+llama-index-retrievers-bm25
