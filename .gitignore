@@ -33,6 +33,7 @@ agent_data.db
 ct_gov_local_db/
 ct_gov_gemini_db/
 ct_gov_index/
+ct_gov_lancedb/
 
 # Chrome/Browser session data
 user_session/

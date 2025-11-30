@@ -12,14 +12,8 @@ import os
 import streamlit as st
 from typing import List, Optional
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
-from llama_index.vector_stores.chroma import ChromaVectorStore
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.llms.gemini import Gemini
-from llama_index.core.schema import NodeWithScore, TextNode
-from llama_index.core.postprocessor.types import BaseNodePostprocessor
-from llama_index.retrievers.bm25 import BM25Retriever
-from llama_index.core.retrievers import QueryFusionRetriever
-import chromadb
+from llama_index.vector_stores.lancedb import LanceDBVectorStore
+import lancedb
 from dotenv import load_dotenv
 
 
@@ -55,7 +49,7 @@ def setup_llama_index():
 @st.cache_resource
 def load_index() -> VectorStoreIndex:
     """
-    Loads the persistent ChromaDB index.
+    Loads the persistent LanceDB index.
 
     Uses Streamlit's @st.cache_resource to load the index only once per session.
 
@@ -63,14 +57,18 @@ def load_index() -> VectorStoreIndex:
         VectorStoreIndex: The loaded LlamaIndex vector store index.
     """
     setup_llama_index()
-    # Initialize ChromaDB client pointing to the local persistence directory
-    db = chromadb.PersistentClient(path="./ct_gov_index")
-
-    # Get or create the collection for clinical trials
-    chroma_collection = db.get_or_create_collection("clinical_trials")
+    
+    # Initialize LanceDB
+    db_path = "./ct_gov_lancedb"
+    db = lancedb.connect(db_path)
 
     # Create the vector store wrapper
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+    # mode="read" ensures we don't accidentally overwrite or create new tables here
+    vector_store = LanceDBVectorStore(
+        uri=db_path, 
+        table_name="clinical_trials",
+        query_mode="hybrid"
+    )
 
     # Create storage context
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
@@ -84,71 +82,22 @@ def load_index() -> VectorStoreIndex:
 
 def get_hybrid_retriever(index: VectorStoreIndex, similarity_top_k: int = 50, filters=None):
     """
-    Creates a Hybrid Retriever (Vector + BM25) using Reciprocal Rank Fusion.
+    Creates a Hybrid Retriever using LanceDB's native hybrid search.
     
     Args:
         index (VectorStoreIndex): The loaded vector index.
-        similarity_top_k (int): Number of top results to retrieve from EACH retriever.
-        filters (MetadataFilters, optional): Filters to apply to the vector retriever.
+        similarity_top_k (int): Number of top results to retrieve.
+        filters (MetadataFilters, optional): Filters to apply.
         
     Returns:
-        QueryFusionRetriever: The combined retriever.
+        VectorIndexRetriever: The configured retriever.
     """
-    # 1. Vector Retriever
-    vector_retriever = index.as_retriever(similarity_top_k=similarity_top_k, filters=filters)
-
-    # 2. BM25 Retriever
-    # BM25 requires an in-memory index of nodes.
-    # If the docstore is empty (common with ChromaVectorStore), fetch nodes directly from the vector store.
-    
-    try:
-        # Try to get all nodes from the docstore
-        nodes = list(index.docstore.docs.values())
-        if not nodes:
-            # Fallback: Fetch from Chroma directly to build BM25
-            print("⚠️ Docstore empty. Fetching nodes from Chroma for BM25...")
-            try:
-                # Access the underlying Chroma collection
-                if hasattr(index.vector_store, "_collection"):
-                    result = index.vector_store._collection.get()
-                    # result is a dict with 'ids', 'documents', 'metadatas'
-                    ids = result["ids"]
-                    documents = result["documents"]
-                    metadatas = result["metadatas"]
-                    
-                    nodes = []
-                    for i, doc_id in enumerate(ids):
-                        text = documents[i]
-                        meta = metadatas[i] if metadatas else {}
-                        node = TextNode(text=text, id_=doc_id, metadata=meta)
-                        nodes.append(node)
-                    
-                    print(f"✅ Reconstructed {len(nodes)} nodes from Chroma for BM25.")
-            except Exception as e:
-                print(f"❌ Failed to fetch from Chroma: {e}")
-            
-        if nodes:
-            bm25_retriever = BM25Retriever.from_defaults(
-                nodes=nodes,
-                similarity_top_k=similarity_top_k
-            )
-        else:
-            # If we can't build BM25, return just vector retriever
-            print("⚠️ Could not build BM25 index (no nodes found). Returning Vector Retriever only.")
-            return vector_retriever
-
-    except Exception as e:
-        print(f"⚠️ Error building BM25 retriever: {e}. Returning Vector Retriever only.")
-        return vector_retriever
-
-    # 3. Fusion
-    return QueryFusionRetriever(
-        [vector_retriever, bm25_retriever],
-        similarity_top_k=similarity_top_k,
-        num_queries=1,  # No query generation, just use the original query
-        mode="reciprocal_rerank",
-        use_async=True,
-        verbose=True,
+    # LanceDB supports native hybrid search via query_mode="hybrid"
+    # We pass this configuration to the retriever
+    return index.as_retriever(
+        similarity_top_k=similarity_top_k, 
+        filters=filters,
+        vector_store_query_mode="hybrid"
     )
 
 

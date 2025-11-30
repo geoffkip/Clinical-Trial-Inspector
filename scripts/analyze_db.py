@@ -15,7 +15,7 @@ Usage:
     cd scripts && python analyze_db.py
 """
 
-import chromadb
+import lancedb
 import pandas as pd
 import os
 
@@ -27,7 +27,7 @@ def analyze_db():
     # Determine the project root directory (one level up from this script)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
-    db_path = os.path.join(project_root, "ct_gov_index")
+    db_path = os.path.join(project_root, "ct_gov_lancedb")
 
     if not os.path.exists(db_path):
         print(f"❌ Database directory '{db_path}' does not exist.")
@@ -36,29 +36,35 @@ def analyze_db():
 
     print(f"📂 Loading database from {db_path}...")
     try:
-        client = chromadb.PersistentClient(path=db_path)
-
-        # Check for collection existence
-        collections = client.list_collections()
-        # Handle different ChromaDB versions for list_collections output
-        col_names = [c if isinstance(c, str) else c.name for c in collections]
-
-        if "clinical_trials" not in col_names:
-            print(f"❌ Collection 'clinical_trials' not found. Available: {col_names}")
-            return
-
-        collection = client.get_collection("clinical_trials")
-        count = collection.count()
-        print(f"✅ Found 'clinical_trials' collection with {count} documents.")
-
-        # Fetch all metadata for analysis
-        data = collection.get(include=["metadatas"])
+        db = lancedb.connect(db_path)
         
-        if not data["metadatas"]:
-            print("❌ No metadata found.")
+        # Check for table existence
+        if "clinical_trials" not in db.table_names():
+            print(f"❌ Table 'clinical_trials' not found. Available: {db.table_names()}")
             return
 
-        df = pd.DataFrame(data["metadatas"])
+        tbl = db.open_table("clinical_trials")
+        count = len(tbl)
+        print(f"✅ Found 'clinical_trials' table with {count} documents.")
+
+        # Fetch all data for analysis
+        df = tbl.to_pandas()
+        
+        if df.empty:
+            print("❌ No data found.")
+            return
+            
+        # Handle metadata if nested (LlamaIndex might nest it)
+        if "metadata" in df.columns:
+             # Try to flatten if it's a struct/dict
+             try:
+                 meta_df = pd.json_normalize(df["metadata"])
+                 # Merge with original df or just use meta_df for analysis
+                 # We'll use meta_df for the metadata fields analysis
+                 # But we might need 'text' from original
+                 df = pd.concat([df.drop(columns=["metadata"]), meta_df], axis=1)
+             except:
+                 pass
 
         if "nct_id" in df.columns:
             unique_ncts = df["nct_id"].nunique()

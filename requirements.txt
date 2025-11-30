@@ -4,12 +4,11 @@ python-dotenv
 langchain
 langchain-community
 langchain-google-genai==2.0.0
-langchain-chroma
-chromadb
+lancedb
 lark
 langchain-huggingface
 llama-index
-llama-index-vector-stores-chroma
+llama-index-vector-stores-lancedb
 llama-index-embeddings-huggingface
 llama-index-llms-gemini
 streamlit-option-menu

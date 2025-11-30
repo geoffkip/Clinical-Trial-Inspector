@@ -517,14 +517,19 @@ if page == "Raw Data":
         if st.button("Prepare Full Download (CSV)"):
             with st.spinner("Fetching all records from database..."):
                 try:
-                    # Access the underlying ChromaDB collection directly for speed
-                    collection = index.vector_store._collection
-
-                    # Fetch all metadata
-                    all_data = collection.get(include=["metadatas"])
-
-                    if all_data and all_data["metadatas"]:
-                        df_full = pd.DataFrame(all_data["metadatas"])
+                    # Access LanceDB directly for speed
+                    import lancedb
+                    db = lancedb.connect("./ct_gov_lancedb")
+                    tbl = db.open_table("clinical_trials")
+                    
+                    # Fetch all data
+                    df_full = tbl.to_pandas()
+                    
+                    # Handle metadata flattening if needed
+                    if "metadata" in df_full.columns:
+                        meta_df = pd.json_normalize(df_full["metadata"])
+                        # Combine or just use metadata
+                        df_full = meta_df
 
                         # Convert to CSV
                         csv = df_full.to_csv(index=False).encode("utf-8")

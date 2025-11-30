@@ -25,8 +25,20 @@ import concurrent.futures
 # LlamaIndex Imports
 from llama_index.core import Document, VectorStoreIndex, StorageContext, Settings
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.vector_stores.chroma import ChromaVectorStore
-import chromadb
+from llama_index.vector_stores.lancedb import LanceDBVectorStore
+import lancedb
+
+# List of US States for extraction
+US_STATES = [
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", 
+    "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", 
+    "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", 
+    "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", 
+    "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", 
+    "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", 
+    "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia", 
+    "Wisconsin", "Wyoming", "District of Columbia"
+]
 
 load_dotenv()
 
@@ -242,6 +254,18 @@ def process_study(study):
             locations.append(f"{facility} ({city}, {country})")
         locations_str = "; ".join(locations[:5])  # Limit to 5 locations to save space
 
+        # Extract State (First match)
+        state = "Unknown"
+        # Check locations for US States
+        for loc_str in locations:
+            if "United States" in loc_str:
+                for s in US_STATES:
+                    if s in loc_str:
+                        state = s
+                        break
+                if state != "Unknown":
+                    break
+
         # Construct Rich Page Content with Markdown Headers
         # This text is what gets embedded and searched
         page_content = (
@@ -281,6 +305,7 @@ def process_study(study):
             "country": (
                 locations[0].split(",")[-1].strip() if locations else "Unknown"
             ),
+            "state": state,
         }
 
         return Document(text=page_content, metadata=metadata, id_=nct_id)
@@ -331,17 +356,32 @@ def run_ingestion():
     print("🧠 Initializing LlamaIndex Embeddings (PubMedBERT)...")
     embed_model = HuggingFaceEmbedding(model_name="pritamdeka/S-PubMedBert-MS-MARCO")
 
-    # Initialize ChromaDB (Persistent)
-    print("🚀 Initializing ChromaDB...")
+    # Initialize LanceDB (Persistent)
+    print("🚀 Initializing LanceDB...")
 
     # Determine the project root directory (one level up from this script)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
-    db_path = os.path.join(project_root, "ct_gov_index")
+    db_path = os.path.join(project_root, "ct_gov_lancedb")
 
-    db = chromadb.PersistentClient(path=db_path)
-    chroma_collection = db.get_or_create_collection("clinical_trials")
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+    # Connect to LanceDB
+    db = lancedb.connect(db_path)
+    
+    table_name = "clinical_trials"
+    if table_name in db.table_names():
+        mode = "append"
+        print(f"ℹ️ Table '{table_name}' exists. Appending data.")
+    else:
+        mode = "create"
+        print(f"ℹ️ Table '{table_name}' does not exist. Creating new table.")
+
+    # Initialize Vector Store
+    vector_store = LanceDBVectorStore(
+        uri=db_path, 
+        table_name=table_name, 
+        mode=mode,
+        query_mode="hybrid" # Enable hybrid search support
+    )
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
     # Initialize Index ONCE
@@ -377,14 +417,17 @@ def run_ingestion():
 
             if documents:
                 # Overwrite Logic:
-                # To avoid duplicates and ensure we update existing studies with new fields (like interventions),
-                # we first delete any existing records with the same NCT IDs.
+                # To avoid duplicates, we delete existing records with the same NCT IDs.
                 doc_ids = [doc.id_ for doc in documents]
                 try:
-                    # Delete by metadata nct_id to be safe (covers all nodes for a doc)
-                    chroma_collection.delete(where={"nct_id": {"$in": doc_ids}})
-                except Exception:
-                    # Ignore if collection is empty or other minor errors
+                    # LanceDB supports deletion via SQL-like filter
+                    # We construct a filter string: "nct_id IN ('NCT123', 'NCT456')"
+                    ids_str = ", ".join([f"'{id}'" for id in doc_ids])
+                    if ids_str:
+                        tbl = db.open_table("clinical_trials")
+                        tbl.delete(f"nct_id IN ({ids_str})")
+                except Exception as e:
+                    # Ignore if table doesn't exist yet
                     pass
 
                 # Efficient Batch Insertion

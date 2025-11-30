@@ -338,11 +338,27 @@ def fetch_study_analytics_data(
     index = load_index()
 
     # 1. Retrieve Data
+    # 1. Retrieve Data
     if query.lower() == "overall":
         try:
-            collection = index.vector_store._collection
-            result = collection.get(include=["metadatas"])
-            data = result["metadatas"]
+            # Connect to LanceDB directly for speed
+            import lancedb
+            db = lancedb.connect("./ct_gov_lancedb")
+            tbl = db.open_table("clinical_trials")
+            # Fetch all data as pandas DataFrame
+            df = tbl.to_pandas()
+            
+            # LlamaIndex stores metadata in a 'metadata' column (usually as a dict/struct)
+            # We need to flatten it to get columns like 'status', 'phase', etc.
+            if "metadata" in df.columns:
+                # Check if it's already a dict or needs parsing
+                # LanceDB to_pandas() converts struct to dict
+                meta_df = pd.json_normalize(df["metadata"])
+                df = meta_df
+            
+            # If columns are already flat (depending on schema evolution), we are good.
+            # But usually it's nested.
+            
         except Exception as e:
             return f"Error fetching full dataset: {e}"
     else:
@@ -373,7 +389,12 @@ def fetch_study_analytics_data(
         if sponsor and sponsor.lower() not in query.lower():
             search_query = f"{sponsor} {query}"
 
-        retriever = index.as_retriever(similarity_top_k=5000, filters=metadata_filters)
+        # Use hybrid search for better recall
+        retriever = index.as_retriever(
+            similarity_top_k=5000, 
+            filters=metadata_filters,
+            vector_store_query_mode="hybrid"
+        )
         nodes = retriever.retrieve(search_query)
         
         # --- Strict Keyword Filtering ---
@@ -410,8 +431,7 @@ def fetch_study_analytics_data(
             nodes = filtered_nodes
         
         data = [node.metadata for node in nodes]
-
-    df = pd.DataFrame(data)
+        df = pd.DataFrame(data)
     
     if "nct_id" in df.columns:
         df = df.drop_duplicates(subset="nct_id")
