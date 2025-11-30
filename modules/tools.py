@@ -348,7 +348,6 @@ def fetch_study_analytics_data(
     index = load_index()
 
     # 1. Retrieve Data
-    # 1. Retrieve Data
     if query.lower() == "overall":
         try:
             # Connect to LanceDB directly for speed

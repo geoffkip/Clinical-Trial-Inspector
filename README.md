@@ -7,7 +7,7 @@ Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, **Streamlit
 ## ✨ Key Features
 
 ### 2. 🧠 Intelligent Search & Retrieval
-*   **Hybrid Search**: Combines **Semantic Search** (vector similarity) with **BM25 Keyword Search** (sparse retrieval) using **Reciprocal Rank Fusion (RRF)**. This ensures you find studies that match both the *meaning* (e.g., "kidney cancer" -> "renal cell carcinoma") and *exact terms* (e.g., "NCT04589845", "Teclistamab").
+*   **Hybrid Search**: Combines **Semantic Search** (vector similarity) with **BM25 Keyword Search** (sparse retrieval) using **LanceDB's Native Hybrid Search**. This ensures you find studies that match both the *meaning* (e.g., "kidney cancer" -> "renal cell carcinoma") and *exact terms* (e.g., "NCT04589845", "Teclistamab").
 *   **Smart Filtering**:
     *   **Strict Pre-Filtering**: For specific sponsors (e.g., "Pfizer"), it forces the engine to look *only* at that sponsor's studies first, ensuring 100% recall.
     *   **Strict Keyword Filtering (Analytics Only)**: For counting questions (e.g., "How many studies..."), the **Analytics Engine** (`get_study_analytics`) prioritizes studies where the query explicitly appears in the **Title** or **Conditions**, ensuring high precision and accurate counts.
@@ -35,6 +35,7 @@ Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, **Streamlit
 
 ### ⚡ High-Performance Ingestion
 - **Parallel Processing**: Uses multi-core processing to ingest and embed thousands of studies per minute.
+- **LanceDB Integration**: Uses **LanceDB** for high-performance vector storage and native hybrid search.
 - **Idempotent Updates**: Smartly updates existing records without duplication, allowing for seamless data refreshes.
 
 ## 🤖 Agent Capabilities & Tools
@@ -74,11 +75,11 @@ The agent is equipped with specialized tools to handle different types of reques
 ## ⚙️ How It Works (RAG Pipeline)
 
 1.  **Ingestion**: `ingest_ct.py` fetches study data from ClinicalTrials.gov. It extracts rich text (including **Eligibility Criteria** and **Interventions**) and structured metadata. It uses **multiprocessing** for speed.
-2.  **Embedding**: Text is converted into vector embeddings using `PubMedBERT` and stored in **ChromaDB**.
+2.  **Embedding**: Text is converted into vector embeddings using `PubMedBERT` and stored in **LanceDB**.
 3.  **Retrieval**:
     *   **Query Transformation**: Synonyms are injected via LLM.
     *   **Pre-Filtering**: Strict filters (Status, Year, Sponsor) reduce the search scope.
-    *   **Hybrid Search**: Parallel **Vector Search** (Semantic) and **BM25** (Keyword) combined via **Reciprocal Rank Fusion (RRF)**.
+    *   **Hybrid Search**: Parallel **Vector Search** (Semantic) and **BM25** (Keyword) combined via **LanceDB Native Hybrid Search**.
     *   **Post-Filtering**: Additional metadata checks (Phase, Intervention) on retrieved candidates.
     *   **Re-Ranking**: Cross-Encoder re-scoring.
 4.  **Synthesis**: **Google Gemini** synthesizes the final answer.
@@ -88,7 +89,7 @@ The agent is equipped with specialized tools to handle different types of reques
 ```mermaid
 graph TD
     API[ClinicalTrials.gov API] -->|Fetch Batches| Script[ingest_ct.py]
-    Script -->|Process & Embed| Chroma[(ChromaDB)]
+    Script -->|Process & Embed| LanceDB[(LanceDB)]
 ```
 
 ### 🧠 RAG Retrieval Flow
@@ -110,7 +111,7 @@ graph TD
 
 ```mermaid
 graph TD
-    Chroma[(ChromaDB)] -->|Metadata| GraphBuilder[build_graph]
+    LanceDB[(LanceDB)] -->|Metadata| GraphBuilder[build_graph]
     GraphBuilder -->|Nodes & Edges| Agraph[Streamlit Agraph]
 ```
 
@@ -120,7 +121,7 @@ graph TD
 - **LLM**: Google Gemini (`gemini-2.5-flash`)
 - **Orchestration**: LangChain (Agents, Tool Calling)
 - **Retrieval (RAG)**: LlamaIndex (VectorStoreIndex, SubQuestionQueryEngine)
-- **Vector Database**: ChromaDB (Local)
+- **Vector Database**: LanceDB (Local)
 - **Embeddings**: HuggingFace (`pritamdeka/S-PubMedBert-MS-MARCO`)
 
 ## 🚀 Getting Started
@@ -165,7 +166,7 @@ Populate the local database. The script uses parallel processing for speed.
 python scripts/ingest_ct.py --limit 5000 --years 5
 
 # Ingest ALL studies (Warning: Large download!)
-python scripts/ingest_ct.py --limit -1
+python scripts/ingest_ct.py --limit -1 --years 10
 ```
 
 ### 2. Run the Agent
@@ -200,7 +201,7 @@ streamlit run ct_agent_app.py
     - `ingest_ct.py`: Parallel data ingestion pipeline.
     - `analyze_db.py`: Database inspection.
 
-- `ct_gov_index/`: Persisted ChromaDB vector store.
+- `ct_gov_lancedb/`: Persisted LanceDB vector store.
 - `tests/`:
     - `test_unit.py`: Core logic tests.
     - `test_hybrid_search.py`: Integration tests for search engine.
