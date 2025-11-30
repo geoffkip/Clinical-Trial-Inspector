@@ -129,7 +129,6 @@ def load_environment():
     load_dotenv()
 
 
-
 # --- Configuration ---
 def setup_llama_index():
     """

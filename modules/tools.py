@@ -75,139 +75,152 @@ def search_trials(
     year: int = None,
 ):
     """
-    Searches for clinical trials using semantic search with optional strict filters.
-
-    This tool combines vector-based semantic search with metadata filtering to find
-    relevant studies. It supports both pre-retrieval filtering (efficient) and
-    post-retrieval filtering (flexible).
+    Searches for clinical trials using semantic search with robust filtering.
 
     Args:
-        query (str, optional): The natural language search query (e.g., "diabetes treatment").
-                               If not provided, one is constructed from the filters.
-        status (str, optional): Filter by recruitment status (e.g., "RECRUITING", "COMPLETED").
-        phase (str, optional): Filter by trial phase (e.g., "PHASE2", "PHASE3").
-                               Accepts comma-separated values for multiple phases.
-        sponsor (str, optional): Filter by sponsor name (e.g., "Pfizer").
-                                 Accepts comma-separated values.
-        intervention (str, optional): Filter by intervention/drug name (e.g., "Keytruda").
-        year (int, optional): Filter for studies starting on or after this year (e.g., 2020).
+        query (str, optional): The natural language search query.
+        status (str, optional): Filter by recruitment status.
+        phase (str, optional): Filter by trial phase.
+        sponsor (str, optional): Filter by sponsor name.
+        intervention (str, optional): Filter by intervention/drug name.
+        year (int, optional): Filter for studies starting on or after this year.
 
     Returns:
-        str: A string representation of the search results (top relevant studies).
+        str: A structured list of relevant studies.
     """
     index = load_index()
-
+    
+    # Constants
+    TOP_K_STRICT = 500  # High recall for pre-filtered search
+    TOP_K_HYBRID = 500  # Higher recall for hybrid search (fuzzy matching)
+    
     # --- Query Construction ---
-    # Handle missing query by constructing one from filters to ensure vector search has content
     if not query:
-        parts = []
-        if sponsor:
-            parts.append(sponsor)
-        if intervention:
-            parts.append(intervention)
-        if phase:
-            parts.append(phase)
-        if status:
-            parts.append(status)
+        parts = [p for p in [sponsor, intervention, phase, status] if p]
         query = " ".join(parts) if parts else "clinical trial"
     else:
-        # Inject sponsor and phase into query if they are not already present
-        # This helps the vector search align with the metadata filters
-        if sponsor:
-            norm_sponsor = normalize_sponsor(sponsor)
-            if norm_sponsor and norm_sponsor.lower() not in query.lower():
-                query = f"{norm_sponsor} {query}"
+        # Inject context for vector search
+        if sponsor and normalize_sponsor(sponsor).lower() not in query.lower():
+            query = f"{normalize_sponsor(sponsor)} {query}"
         if intervention and intervention.lower() not in query.lower():
             query = f"{intervention} {query}"
-        if phase and phase.lower() not in query.lower():
-            query = f"{phase} {query}"
-
-        # Expand query with synonyms
+        
         query = expand_query(query)
 
-    # --- Pre-Retrieval Filters (ChromaDB) ---
-    # These filters are applied *before* vector search, reducing the search space.
-    filters = []
+    print(f"🔍 Tool Called: search_trials(query='{query}', sponsor='{sponsor}')")
 
-    # Detect if query is an NCT ID (e.g., NCT01234567)
-    # If found, force an exact match on the ID
+    # --- Strategy 1: Strict Pre-Retrieval Filtering (High Precision) ---
+    # Try to filter by Sponsor/Status/Year at the database level first.
+    pre_filters = []
+    
+    # NCT ID Match
     nct_match = re.search(r"NCT\d+", query, re.IGNORECASE)
     if nct_match:
         nct_id = nct_match.group(0).upper()
-        print(f"🎯 Detected NCT ID: {nct_id}. Switching to exact match.")
-        filters.append(
-            MetadataFilter(key="nct_id", value=nct_id, operator=FilterOperator.EQ)
-        )
+        pre_filters.append(MetadataFilter(key="nct_id", value=nct_id, operator=FilterOperator.EQ))
 
     if status:
-        filters.append(
-            MetadataFilter(
-                key="status", value=status.upper(), operator=FilterOperator.EQ
-            )
-        )
+        pre_filters.append(MetadataFilter(key="status", value=status.upper(), operator=FilterOperator.EQ))
     if year:
-        filters.append(
-            MetadataFilter(key="start_year", value=year, operator=FilterOperator.GTE)
-        )
+        pre_filters.append(MetadataFilter(key="start_year", value=year, operator=FilterOperator.GTE))
+        
+    # Sponsor Pre-Filter (The Fix!)
+    if sponsor:
+        from modules.utils import get_sponsor_variations
+        variations = get_sponsor_variations(sponsor)
+        if variations:
+            print(f"🎯 Applying strict pre-filter for sponsor '{sponsor}' ({len(variations)} variants)")
+            pre_filters.append(MetadataFilter(key="org", value=variations, operator=FilterOperator.IN))
+        else:
+            print(f"⚠️ No strict mapping for sponsor '{sponsor}'. Will rely on fuzzy post-filtering.")
 
-    metadata_filters = MetadataFilters(filters=filters) if filters else None
-
-    print(
-        f"🔍 Tool Called: search_trials(query='{query}', status='{status}', phase='{phase}', sponsor='{sponsor}', intervention='{intervention}')"
-    )
-
-    # --- Post-Retrieval Filters (Custom) ---
-    # These filters are applied *after* fetching candidates.
-    # Useful for complex logic like fuzzy matching or multi-value fields that Chroma might not handle perfectly.
-    post_filters = []
-    if phase or sponsor or intervention:
-        post_filters.append(
-            LocalMetadataPostFilter(
-                phase=phase, sponsor=sponsor, intervention=intervention
-            )
-        )
-
-    # --- Hybrid Search Tuning ---
-    # Boost results with exact keyword matches in Title/ID
-    post_filters.append(KeywordBoostingPostProcessor())
-
-    # --- Re-Ranking ---
-    # Use a Cross-Encoder to re-score the top results for better relevance.
-    reranker = SentenceTransformerRerank(
-        model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=5
-    )
-    post_filters.append(reranker)
-
-    # Increase retrieval limit if filters are present to ensure we get enough candidates
-    # before post-filtering reduces the count.
-    top_k = 200 if (phase or sponsor or intervention) else 50
-
+    metadata_filters = MetadataFilters(filters=pre_filters) if pre_filters else None
+    
+    # Post-processors (Re-ranking)
+    # We set top_n=50 to ensure we don't aggressively truncate results for "list" queries
+    reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=50)
+    
+    # Execute Strict Search
     query_engine = index.as_query_engine(
-        similarity_top_k=top_k,
-        node_postprocessors=post_filters,
+        similarity_top_k=TOP_K_STRICT,
         filters=metadata_filters,
+        node_postprocessors=[reranker]
     )
     response = query_engine.query(query)
-
-    # --- Self-Correction / Retry Logic ---
-    if not response.source_nodes and (phase or sponsor or intervention):
-        print(
-            "⚠️ No results found with strict filters. Retrying with relaxed filters..."
+    
+    # --- Strategy 2: Hybrid Search (Fallback) ---
+    # If strict search yields nothing (e.g. sponsor name didn't match exactly), 
+    # fall back to Vector Search + Fuzzy Post-Filtering.
+    if not response.source_nodes and sponsor:
+        print("⚠️ Strict pre-filter returned 0 results. Falling back to Hybrid Search (Fuzzy Match)...")
+        
+        # Remove Sponsor from pre-filters, keep others (Status, Year)
+        fallback_filters = [f for f in pre_filters if f.key != "org"]
+        fallback_metadata_filters = MetadataFilters(filters=fallback_filters) if fallback_filters else None
+        
+        # Add Fuzzy Post-Filter
+        post_filters = [
+            LocalMetadataPostFilter(phase=phase, sponsor=sponsor, intervention=intervention),
+            KeywordBoostingPostProcessor(),
+            reranker
+        ]
+        
+        query_engine_hybrid = index.as_query_engine(
+            similarity_top_k=TOP_K_HYBRID,
+            filters=fallback_metadata_filters,
+            node_postprocessors=post_filters
         )
-        # Retry without the strict LocalMetadataPostFilter, but keep the Re-Ranker
-        relaxed_post_filters = [reranker]
+        response = query_engine_hybrid.query(query)
 
-        query_engine_relaxed = index.as_query_engine(
-            similarity_top_k=50,
-            node_postprocessors=relaxed_post_filters,
-            filters=metadata_filters,  # Keep pre-retrieval filters (Status, Year) as they are usually hard constraints
+    # --- Formatting Output ---
+    if not response.source_nodes:
+        return "No matching studies found. Try broadening your search terms or filters."
+
+    # Calculate total potential matches before strict filtering
+    total_found = len(response.source_nodes)
+    
+    # Filter by Relevance Score for display
+    MIN_SCORE = 1.5
+    relevant_nodes = [node for node in response.source_nodes if node.score > MIN_SCORE]
+    
+    # If strict filtering removes too much, show at least top 3 to be helpful
+    if len(relevant_nodes) < 3 and total_found > 0:
+        relevant_nodes = response.source_nodes[:3]
+        
+    display_limit = 20
+    display_nodes = relevant_nodes[:display_limit]
+    
+    results = []
+    for node in display_nodes:
+        meta = node.metadata
+        entry = (
+            f"**{meta.get('title', 'Untitled')}**\n"
+            f"   - ID: {meta.get('nct_id')}\n"
+            f"   - Phase: {meta.get('phase', 'N/A')}\n"
+            f"   - Status: {meta.get('status', 'N/A')}\n"
+            f"   - Sponsor: {meta.get('org', 'Unknown')}\n"
+            f"   - Relevance: {node.score:.2f}"
         )
-        response = query_engine_relaxed.query(query)
-        if response.source_nodes:
-            return f"No exact matches found for your strict filters. Here are some semantically relevant studies for '{query}':\n{response}"
+        results.append(entry)
 
-    print(f"✅ Retrieved {len(response.source_nodes)} nodes after filtering.")
-    return str(response)
+    # Construct Message
+    header = f"Found {total_found} potential matches."
+    if len(relevant_nodes) < total_found:
+        header += f" Here are the {len(display_nodes)} most relevant ones (Score > {MIN_SCORE}):"
+    else:
+        header += f" Here are the top {len(display_nodes)}:"
+
+    output = f"{header}\n\n" + "\n\n".join(results)
+    
+    if total_found > len(display_nodes):
+        remaining = total_found - len(display_nodes)
+        footer = (
+            f"\n\n_(...and {remaining} more studies with lower relevance scores.)_\n"
+            f"💡 **Tip**: To narrow this down, try adding filters like Phase, Status, or specific inclusion criteria."
+        )
+        output += footer
+        
+    return output
 
 
 @langchain_tool("find_similar_studies")
@@ -316,15 +329,13 @@ def fetch_study_analytics_data(
                 )
             )
         if phase and "," not in phase:
-             pass
+            pass
 
         if sponsor:
-            from modules.utils import get_sponsor_variations
+            # Use the helper to get all variations (e.g. "Pfizer" -> ["Pfizer", "Pfizer Inc."])
             sponsor_variations = get_sponsor_variations(sponsor)
             if sponsor_variations:
-                print(
-                    f"🎯 Using strict pre-filter for sponsor '{sponsor}': {len(sponsor_variations)} variations found."
-                )
+                print(f"🎯 Using strict pre-filter for sponsor '{sponsor}': {len(sponsor_variations)} variations found.")
                 filters.append(
                     MetadataFilter(
                         key="org", value=sponsor_variations, operator=FilterOperator.IN
@@ -339,6 +350,7 @@ def fetch_study_analytics_data(
 
         retriever = index.as_retriever(similarity_top_k=5000, filters=metadata_filters)
         nodes = retriever.retrieve(search_query)
+        
         data = [node.metadata for node in nodes]
 
     df = pd.DataFrame(data)
@@ -492,8 +504,13 @@ def compare_studies(query: str):
     index = load_index()
 
     # Create a base query engine for the sub-questions
-    # We use a standard engine with a reasonable top_k
-    base_engine = index.as_query_engine(similarity_top_k=10)
+    # We increase top_k and add re-ranking to improve recall for comparison queries
+    reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-12-v2", top_n=10)
+    
+    base_engine = index.as_query_engine(
+        similarity_top_k=50,
+        node_postprocessors=[reranker]
+    )
 
     # Wrap it in a QueryEngineTool
     query_tool = QueryEngineTool(
@@ -520,7 +537,7 @@ def compare_studies(query: str):
 
     try:
         response = query_engine.query(query)
-        return str(response)
+        return str(response) + "\n\n(Note: This analysis is based on the most relevant studies retrieved from the database, not necessarily an exhaustive list.)"
     except Exception as e:
         return f"Error during comparison: {e}"
 

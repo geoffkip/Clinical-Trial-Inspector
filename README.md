@@ -6,14 +6,14 @@ Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, **Streamlit
 
 ## ✨ Key Features
 
-### 🧠 Intelligent Search & RAG
-- **Natural Language Queries**: Ask complex questions like *"Find Phase 3 Pfizer studies for Multiple Myeloma started after 2022""*.
-- **Semantic Understanding**: Powered by **PubMedBERT** embeddings (`pritamdeka/S-PubMedBert-MS-MARCO`) to understand medical context better than keyword matching.
-- **Advanced Retrieval**:
-    - **Query Expansion**: Automatically expands queries with medical synonyms (e.g., "cancer" -> "carcinoma", "tumor") using the LLM.
-    - **Hybrid Search**: Combines semantic vector search with keyword boosting (BM25-style) for exact matches in titles/IDs.
-    - **Re-Ranking**: Uses a Cross-Encoder (`ms-marco-MiniLM`) to re-score results for maximum relevance.
-- **Query Decomposition**: Breaks down complex multi-part questions (e.g., *"Compare the primary outcomes of Keytruda vs Opdivo"*) into sub-questions for precise answers.
+### 2. 🧠 Intelligent Search & Retrieval
+*   **Hybrid Search**: Combines **Semantic Search** (vector similarity) with **Keyword Boosting** (BM25-style) to find studies that match both the *meaning* and the *specific terms* of your query.
+*   **Smart Filtering**:
+    *   **Strict Pre-Filtering**: For specific sponsors (e.g., "Pfizer"), it forces the engine to look *only* at that sponsor's studies first, ensuring 100% recall.
+*   **Smart Summary**: For broad queries (e.g., "Show me all Pfizer studies"), it reports the total count (e.g., "Found 50 potential matches") and lists the top 20 most relevant ones, keeping the chat concise.
+*   **Query Expansion**: Automatically expands your search terms with medical synonyms (e.g., "Heart Attack" -> "Myocardial Infarction").
+*   **Re-Ranking**: Uses a Cross-Encoder (`ms-marco-MiniLM`) to re-score results for maximum relevance.
+*   **Query Decomposition**: Breaks down complex multi-part questions (e.g., *"Compare the primary outcomes of Keytruda vs Opdivo"*) into sub-questions for precise answers.
 
 ### 📊 Visual Analytics & Insights
 - **Inline Charts (Contextual)**: The agent automatically generates **Bar Charts** and **Line Charts** directly in the chat stream when you ask aggregation questions (e.g., *"Top sponsors for Multiple Myeloma"*).
