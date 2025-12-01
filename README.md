@@ -1,14 +1,3 @@
----
-title: Clinical Trial Inspector
-emoji: 🕵️‍♂️
-colorFrom: blue
-colorTo: indigo
-sdk: docker
-pinned: false
-app_port: 8501
-app_file: ct_agent_app.py
----
-
 # Clinical Trial Inspector Agent 🕵️‍♂️💊
 
 **Clinical Trial Inspector** is an advanced AI agent designed to revolutionize how researchers, clinicians, and analysts explore clinical trial data. By combining **Semantic Search**, **Retrieval-Augmented Generation (RAG)**, and **Visual Analytics**, it transforms raw data from [ClinicalTrials.gov](https://clinicaltrials.gov/) into actionable insights.
@@ -42,7 +31,7 @@ Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, **Streamlit
 
 ### 🔍 Multi-Filter Analysis
 - **Complex Filtering**: Answer sophisticated questions by applying multiple filters simultaneously.
-    - *Example*: *"For **Phase 2 and 3** studies, what are **Pfizer's** most common study indications?"*
+    - *Example*: *"What are **Pfizer's** most common study indications for **Phase 2**?"*
 - **Full Dataset Scope**: General analytics questions analyze the **entire database**, not just a sample.
 - **Smart Retrieval**: Retrieves up to **5,000 relevant studies** for comprehensive analysis.
 
@@ -190,8 +179,11 @@ streamlit run ct_agent_app.py
 ```
 
 ### 3. Ask Questions!
-- **Search**: *"Find studies for Multiple Myeloma."*
+- **Search**: *"Find studies for Multiple Myeloma.","What are the top countries for Multiple Myeloma studies?", "What are the most common drugs for Multiple Myeloma studies?", "Which organizations are the most common for Breast cancer?"*
+- **Similarity Search**: *"Find studies similar to NCT04567890."* 
+- **Temporal Search**: *"Find Migraine studies from 2020."*
 - **Comparison**: *"Compare the primary outcomes of Keytruda vs Opdivo."*
+- **Cohort Creation** *"Create a SQL Query for NCT04567890 study."*
 - **Analytics**: *"Who are the top sponsors for Breast Cancer?"* (Now supports grouping by **Intervention** and **Study Type**!)
 - **Graph**: Go to the **Knowledge Graph** tab to visualize connections.
 
@@ -220,32 +212,3 @@ streamlit run ct_agent_app.py
 - `tests/`:
     - `test_unit.py`: Core logic tests.
     - `test_hybrid_search.py`: Integration tests for search engine.
-
-## 🐳 Deployment
-
-The application is container-ready and can be deployed using Docker.
-
-### Build the Image
-```bash
-docker build -t clinical-trial-agent .
-```
-
-### Run the Container
-You can run the container in two modes:
-
-**1. Admin Mode (API Key in Environment)**
-Pass the key as an environment variable. Users will not be prompted.
-```bash
-docker run -p 8501:8501 -e GOOGLE_API_KEY=your_key_here clinical-trial-agent
-```
-
-**2. User Mode (Prompt for Key)**
-Run without the key. Users will be prompted to enter their own key in the sidebar.
-```bash
-docker run -p 8501:8501 clinical-trial-agent
-```
-
-### Hosting Options
-- **Hugging Face Spaces**: Select "Docker" SDK. Add `GOOGLE_API_KEY` to Secrets for Admin Mode.
-- **Google Cloud Run**: Deploy the container and map port 8501.
-
