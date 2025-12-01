@@ -74,24 +74,23 @@ st.title("🧬 Clinical Trial Inspector Agent")
 # We use Google Gemini-2.5-Flash for fast and accurate responses.
 api_key = os.environ.get("GOOGLE_API_KEY")
 
+# Check session state if env var is missing
+if not api_key and "api_key" in st.session_state:
+    api_key = st.session_state["api_key"]
+
 if not api_key:
     st.sidebar.warning("⚠️ API Key Missing")
     user_key = st.sidebar.text_input("Enter Google API Key:", type="password", help="Get one at https://aistudio.google.com/")
     if user_key:
         st.session_state["api_key"] = user_key
-        api_key = user_key
-        st.sidebar.success("Key set!")
         st.rerun()
     else:
-        # Check if key is already in session state (from previous run)
-        if "api_key" in st.session_state:
-            api_key = st.session_state["api_key"]
-        else:
-            st.warning("Please enter your Google API Key in the sidebar to continue.")
-            st.stop()
+        st.warning("Please enter your Google API Key in the sidebar to continue.")
+        st.stop()
 else:
-    # Env var exists, ensure it's in session state for tools to find
-    st.session_state["api_key"] = api_key
+    # Ensure it's in session state for tools/consistency
+    if "api_key" not in st.session_state:
+        st.session_state["api_key"] = api_key
 
 # Ensure LlamaIndex settings (Embeddings, LLM) are applied on every run
 setup_llama_index(api_key=api_key)
