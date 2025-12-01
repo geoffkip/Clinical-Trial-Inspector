@@ -1,3 +1,14 @@
+---
+title: Clinical Trial Inspector
+emoji: 🧬
+colorFrom: blue
+colorTo: indigo
+sdk: streamlit
+sdk_version: "1.40.1"
+app_file: ct_agent_app.py
+pinned: false
+---
+
 # Clinical Trial Inspector Agent 🕵️‍♂️💊
 
 **Clinical Trial Inspector** is an advanced AI agent designed to revolutionize how researchers, clinicians, and analysts explore clinical trial data. By combining **Semantic Search**, **Retrieval-Augmented Generation (RAG)**, and **Visual Analytics**, it transforms raw data from [ClinicalTrials.gov](https://clinicaltrials.gov/) into actionable insights.
