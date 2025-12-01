@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.pyc
+*.pyo
+
+# Build artifacts
+dist/
+build/
+*.spec
+
+# Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+.env.local
+
+# Session files
+amazon_session.json
+
+# Database files
+agent_data.db
+*.db
+*.db-journal
+ct_gov_lancedb/
+
+# Chrome/Browser session data
+user_session/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+.DS_Store?
+
+# Logs
+*.log
+
+# Dev Containers
+.devcontainer/
+
+# macOS App Bundle (generated, but keep source)
+*.app/
+
+# Temporary files
+*.tmp
+*.temp
