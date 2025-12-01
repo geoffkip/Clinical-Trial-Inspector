@@ -1,13 +1,13 @@
 streamlit
 requests
 python-dotenv
-langchain
-langchain-community
+langchain>=0.3.0
+langchain-community>=0.3.0
 langchain-google-genai==2.0.0
 lancedb
 lark
 langchain-huggingface
-llama-index
+llama-index>=0.12.0
 llama-index-vector-stores-lancedb
 llama-index-embeddings-huggingface
 llama-index-llms-gemini
@@ -17,3 +17,6 @@ folium
 streamlit-folium
 rank_bm25
 llama-index-retrievers-bm25
+# Explicit pins to prevent backtracking
+rdflib>=7.0.0
+PyYAML>=6.0

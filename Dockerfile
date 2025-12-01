@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y \
 # Copy the requirements file into the container at /app
 COPY requirements.txt .
 
+# Upgrade pip to ensure latest resolver
+RUN pip install --upgrade pip
+
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
