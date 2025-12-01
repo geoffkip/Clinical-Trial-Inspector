@@ -413,7 +413,6 @@ def fetch_study_analytics_data(
             q_term = query.lower()
             
             # Check if the query is essentially the sponsor name
-            # Check if the query is essentially the sponsor name
             is_sponsor_query = False
             
             # Check if the query itself normalizes to a known sponsor

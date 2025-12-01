@@ -11,10 +11,12 @@ Built with **LangChain**, **LlamaIndex**, **Streamlit**, **Altair**, **Streamlit
 *   **Smart Filtering**:
     *   **Strict Pre-Filtering**: For specific sponsors (e.g., "Pfizer"), it forces the engine to look *only* at that sponsor's studies first, ensuring 100% recall.
     *   **Strict Keyword Filtering (Analytics Only)**: For counting questions (e.g., "How many studies..."), the **Analytics Engine** (`get_study_analytics`) prioritizes studies where the query explicitly appears in the **Title** or **Conditions**, ensuring high precision and accurate counts.
+    *   **Sponsor Alias Support**: Intelligently maps aliases (e.g., "J&J", "MSD") to their canonical sponsor names ("Janssen", "Merck Sharp & Dohme") for accurate aggregation.
 *   **Smart Summary**: Returns a clean, concise list of relevant studies.
 *   **Query Expansion**: Automatically expands your search terms with medical synonyms (e.g., "Heart Attack" -> "Myocardial Infarction").
 *   **Re-Ranking**: Uses a Cross-Encoder (`ms-marco-MiniLM`) to re-score results for maximum relevance.
 *   **Query Decomposition**: Breaks down complex multi-part questions (e.g., *"Compare the primary outcomes of Keytruda vs Opdivo"*) into sub-questions for precise answers.
+*   **Cohort SQL Generation**: Translates eligibility criteria into standard SQL queries (OMOP CDM) for patient cohort identification.
 
 ### 📊 Visual Analytics & Insights
 - **Inline Charts (Contextual)**: The agent automatically generates **Bar Charts** and **Line Charts** directly in the chat stream when you ask aggregation questions (e.g., *"Top sponsors for Multiple Myeloma"*).
@@ -177,7 +179,7 @@ streamlit run ct_agent_app.py
 ```
 
 ### 3. Ask Questions!
-- **Search**: *"Find studies for Multiple Myeloma in the US."*
+- **Search**: *"Find studies for Multiple Myeloma."*
 - **Comparison**: *"Compare the primary outcomes of Keytruda vs Opdivo."*
 - **Analytics**: *"Who are the top sponsors for Breast Cancer?"* (Now supports grouping by **Intervention** and **Study Type**!)
 - **Graph**: Go to the **Knowledge Graph** tab to visualize connections.
@@ -187,6 +189,7 @@ streamlit run ct_agent_app.py
 - **Unit Tests**: Run `python -m pytest tests/test_unit.py` to verify core logic.
 - **Hybrid Search Tests**: Run `python -m pytest tests/test_hybrid_search.py` to verify the search engine's precision and recall.
 - **Data Integrity**: Run `python -m unittest tests/test_data_integrity.py` to verify database content against known ground truths.
+- **Sponsor Normalization**: Run `python -m pytest tests/test_sponsor_normalization.py` to verify alias mapping logic.
 - **Linting**: Codebase is formatted with `black` and linted with `flake8`.
 
 ## 📂 Project Structure
@@ -196,6 +199,7 @@ streamlit run ct_agent_app.py
     - `utils.py`: Configuration, Normalization, Custom Filters.
     - `constants.py`: Static data (Coordinates, Mappings).
     - `tools.py`: Tool definitions (`search_trials`, `compare_studies`, etc.).
+    - `cohort_tools.py`: SQL generation logic (`get_cohort_sql`).
     - `graph_viz.py`: Knowledge Graph logic.
 - `scripts/`:
     - `ingest_ct.py`: Parallel data ingestion pipeline.

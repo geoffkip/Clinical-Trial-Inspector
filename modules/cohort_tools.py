@@ -100,7 +100,7 @@ def get_cohort_sql(nct_id: str) -> str:
     """
     # 1. Fetch Study Details
     # We reuse the existing tool logic to get the text
-    study_text = get_study_details(nct_id)
+    study_text = get_study_details.invoke(nct_id)
     
     if "No study found" in study_text:
         return f"Could not find study {nct_id}."

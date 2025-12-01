@@ -1,11 +1,7 @@
 """
 Utility functions for the Clinical Trial Agent.
 
-This module handles:
-1.  **Configuration**: Setting up LlamaIndex settings (LLM, Embeddings).
-2.  **Index Loading**: Loading the persisted ChromaDB vector index.
-3.  **Normalization**: Helper functions for standardizing data (e.g., sponsor names).
-4.  **Filtering**: Custom post-processors for filtering retrieval results.
+Handles configuration, LanceDB index loading, data normalization, and custom filtering logic.
 """
 
 import os
@@ -19,8 +15,7 @@ import lancedb
 from dotenv import load_dotenv
 
 # --- MONKEYPATCH START ---
-# Fix for AttributeError: 'LanceEmptyQueryBuilder' object has no attribute 'nprobes'
-# AND Fix for SQL quoting bug in IN filters
+# Patch LanceDBVectorStore to handle 'nprobes' AttributeError and fix SQL quoting for IN filters.
 original_query = LanceDBVectorStore.query
 
 def patched_query(self, query, **kwargs):
@@ -38,33 +33,27 @@ def patched_query(self, query, **kwargs):
 
 LanceDBVectorStore.query = patched_query
 
-# Fix for SQL quoting in LanceDB filters (specifically for IN operator with strings)
+# Patch _to_lance_filter to fix SQL quoting for IN operator with strings.
 from llama_index.vector_stores.lancedb import base as lancedb_base
 from llama_index.core.vector_stores.types import FilterOperator
 
 original_to_lance_filter = lancedb_base._to_lance_filter
 
 def patched_to_lance_filter(standard_filters, metadata_keys):
-    # If standard_filters is None or empty, return None
     if not standard_filters:
         return None
         
-    # We need to reimplement the logic because the original function is what's broken
-    # But we can't easily access the internal logic.
-    # However, we can try to intercept the result? No, it returns a string (SQL where clause).
-    
-    # Let's try to reimplement a robust version for IN operator
+    # Reimplement filter logic to ensure correct SQL generation for LanceDB
     filters = []
     for filter in standard_filters.filters:
         key = filter.key
         if metadata_keys and key not in metadata_keys:
              continue
         
-        # LanceDB stores metadata in a struct column named 'metadata'
-        # So we must prefix the key
+        # Prefix key with 'metadata.' for LanceDB struct column
         lance_key = f"metadata.{key}"
              
-        # Handle IN operator specifically to fix quoting
+        # Handle IN operator with proper string quoting
         if filter.operator == FilterOperator.IN:
             if isinstance(filter.value, list):
                 # Quote strings properly
@@ -78,12 +67,7 @@ def patched_to_lance_filter(standard_filters, metadata_keys):
                 filters.append(f"{lance_key} IN ({val_str})")
                 continue
         
-        # Fallback to original logic for other operators (or we'd have to reimplement all)
-        # But we can't mix our string with the original function's result easily if we call it per filter.
-        # The original function iterates over ALL filters and joins them.
-        
-        # So we MUST reimplement the whole function or at least the loop.
-        # Basic implementation based on common LlamaIndex patterns:
+        # Standard operators
         op = filter.operator
         val = filter.value
         
@@ -116,8 +100,6 @@ lancedb_base._to_lance_filter = patched_to_lance_filter
 # --- MONKEYPATCH END ---
 
 
-
-
 def load_environment():
     """Loads environment variables from .env file."""
     load_dotenv()
@@ -126,14 +108,7 @@ def load_environment():
 # --- Configuration ---
 def setup_llama_index():
     """
-    Configures the global LlamaIndex settings.
-
-    Sets up:
-    - **LLM**: Google Gemini (gemini-2.5-flash) with temperature=0 for deterministic outputs.
-    - **Embeddings**: PubMedBERT (pritamdeka/S-PubMedBert-MS-MARCO) for biomedical domain specificity.
-
-    Raises:
-        SystemExit: If GOOGLE_API_KEY is not found in environment variables.
+    Configures global LlamaIndex settings (LLM and Embeddings).
     """
     if "GOOGLE_API_KEY" not in os.environ:
         st.error("Please set GOOGLE_API_KEY in .env")
@@ -155,12 +130,7 @@ def setup_llama_index():
 @st.cache_resource
 def load_index() -> VectorStoreIndex:
     """
-    Loads the persistent LanceDB index.
-
-    Uses Streamlit's @st.cache_resource to load the index only once per session.
-
-    Returns:
-        VectorStoreIndex: The loaded LlamaIndex vector store index.
+    Loads and caches the persistent LanceDB index.
     """
     setup_llama_index()
     
@@ -169,7 +139,6 @@ def load_index() -> VectorStoreIndex:
     db = lancedb.connect(db_path)
 
     # Define metadata keys explicitly to ensure filters work
-    # This prevents the "NoneType is not iterable" error in _to_lance_filter
     metadata_keys = [
         "nct_id", "title", "org", "sponsor", "status", "phase", 
         "study_type", "start_year", "condition", "intervention", 
@@ -183,8 +152,7 @@ def load_index() -> VectorStoreIndex:
         query_mode="hybrid",
     )
     
-    # Manually set metadata keys since the constructor doesn't accept them
-    # and automatic inference might fail on read-only/empty connections
+    # Manually set metadata keys as constructor doesn't accept them
     vector_store._metadata_keys = metadata_keys
 
     # Create storage context
@@ -261,16 +229,7 @@ SPONSOR_MAPPINGS = {
 
 def normalize_sponsor(sponsor: str) -> Optional[str]:
     """
-    Normalizes sponsor names to handle common aliases and variations.
-    
-    Uses SPONSOR_MAPPINGS to map aliases (e.g., "J&J") and specific variations 
-    (e.g., "Janssen Research & Development, LLC") to the canonical name ("Janssen").
-
-    Args:
-        sponsor (str): The raw sponsor name.
-
-    Returns:
-        Optional[str]: The normalized canonical sponsor name, or None if input is empty.
+    Normalizes sponsor names to canonical forms using centralized mappings.
     """
     if not sponsor:
         return None
@@ -282,14 +241,7 @@ def normalize_sponsor(sponsor: str) -> Optional[str]:
         if s == canonical.lower():
             return canonical
             
-        # Check if input matches any variation (substring or exact match?)
-        # For aliases like "gsk", substring match is risky (e.g. "gsk" in "gskill").
-        # But for "Janssen Research...", we want to map it to "Janssen".
-        
-        # Strategy:
-        # 1. Check exact match against variations
-        # 2. Check if alias is a substring of input (for short aliases like "gsk")
-        
+        # Check variations and aliases
         for v in variations:
             v_lower = v.lower()
             if v_lower == s:
@@ -297,11 +249,7 @@ def normalize_sponsor(sponsor: str) -> Optional[str]:
             # If the variation is a known alias (like 'gsk'), check if it's in the string
             if len(v) < 5 and v_lower in s: 
                  return canonical
-            # If the input is a variation (e.g. input="Janssen Research...", variation="Janssen Research...")
-            # This is covered by exact match above.
             
-            # What if input is "Janssen Research" and variation is "Janssen Research & Development"?
-            # We might want to check if canonical is in the input?
             if canonical.lower() in s:
                 return canonical
 
@@ -310,22 +258,13 @@ def normalize_sponsor(sponsor: str) -> Optional[str]:
 
 def get_sponsor_variations(sponsor: str) -> Optional[List[str]]:
     """
-    Returns a list of exact database 'org' values for a given sponsor alias.
-    This enables strict pre-filtering using the IN operator.
+    Returns list of exact database 'org' values for a given sponsor alias.
     """
     if not sponsor:
         return None
 
     # First, normalize the input to get the canonical name
     canonical = normalize_sponsor(sponsor)
-    
-    # If we have a mapping for this canonical name, return the variations
-    # BUT, we only want the "official" DB variations, not the short aliases (like "gsk").
-    # The original logic had specific lists for DB values.
-    # We should probably separate "Aliases" from "DB Values" in the mapping if we want to be precise.
-    # Or just return all of them? 
-    # If we return "gsk" in the IN clause, it won't match anything in the DB (which has full names), 
-    # but it doesn't hurt.
     
     if canonical in SPONSOR_MAPPINGS:
         return SPONSOR_MAPPINGS[canonical]

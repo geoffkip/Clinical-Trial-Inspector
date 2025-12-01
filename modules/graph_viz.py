@@ -22,7 +22,7 @@ def build_graph(data):
     for study in data:
         nct_id = study.get("nct_id", "Unknown")
         title = study.get("title", "Unknown")
-        # Use 'sponsor' if available (new ingestion), else fallback to 'org' (old ingestion)
+        # Use 'sponsor' if available (new ingestion), else fallback to 'org' 
         sponsor = study.get("sponsor", study.get("org", "Unknown"))
         condition_str = study.get("condition", "")
 

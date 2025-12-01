@@ -1,5 +1,5 @@
 import unittest
-import chromadb
+import lancedb
 import pandas as pd
 import os
 import sys
@@ -12,7 +12,7 @@ class TestDataIntegrity(unittest.TestCase):
         # Determine the project root directory
         self.test_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(self.test_dir)
-        self.db_path = os.path.join(self.project_root, "ct_gov_index")
+        self.db_path = os.path.join(self.project_root, "ct_gov_lancedb")
 
     def test_pfizer_myeloma_counts(self):
         """
@@ -24,18 +24,20 @@ class TestDataIntegrity(unittest.TestCase):
 
         print(f"\n📂 Loading database from {self.db_path}...")
         try:
-            client = chromadb.PersistentClient(path=self.db_path)
-            collection = client.get_collection("clinical_trials")
+            db = lancedb.connect(self.db_path)
+            tbl = db.open_table("clinical_trials")
         except Exception as e:
-            self.skipTest(f"Failed to load ChromaDB collection: {e}")
+            self.skipTest(f"Failed to load LanceDB table: {e}")
 
-        # Fetch all metadata
-        data = collection.get(include=["metadatas"])
+        # Fetch all data (LanceDB is fast enough for this size, or we could query)
+        # For integrity check, loading into DF is fine.
+        df = tbl.to_pandas()
         
-        if not data["metadatas"]:
-            self.fail("Database is empty (no metadata found).")
-
-        df = pd.DataFrame(data["metadatas"])
+        # Handle metadata flattening if needed (LanceDB stores metadata in a struct)
+        if "metadata" in df.columns:
+            # Flatten the metadata column
+            meta_df = pd.json_normalize(df["metadata"])
+            df = meta_df
         
         # 1. Check for 'org' column
         if "org" not in df.columns:
