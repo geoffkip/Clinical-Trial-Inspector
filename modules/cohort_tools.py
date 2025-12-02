@@ -27,8 +27,6 @@ def get_llm():
 
     return ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0, google_api_key=api_key)
 
-# Initialize LLM (Dynamic)
-# llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
 EXTRACT_PROMPT = PromptTemplate(
     template="""
@@ -120,7 +118,7 @@ def get_cohort_sql(nct_id: str) -> str:
         str: A formatted string containing the Extracted Requirements (JSON) and the Generated SQL.
     """
     # 1. Fetch Study Details
-    # We reuse the existing tool logic to get the text
+    # Reuse the existing tool logic to get the text
     study_text = get_study_details.invoke(nct_id)
     
     if "No study found" in study_text:

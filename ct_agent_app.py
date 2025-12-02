@@ -103,7 +103,6 @@ index = load_index()
 
 
 # 3. Define Agent (Cached)
-# 3. Define Agent (Cached)
 @st.cache_resource
 def get_agent(api_key: str):
     """Initializes and caches the LangChain agent. Keyed by API key."""
@@ -182,7 +181,7 @@ def generate_dashboard_analytics():
     }
 
     # Get values from session state
-    # We use .get() to avoid KeyErrors if the widget hasn't initialized yet (though it should have)
+    # Use .get() to avoid KeyErrors if the widget hasn't initialized yet 
     g_by = st.session_state.get("dash_group_by", "Sponsor")
     p_filter = st.session_state.get("dash_phase", "")
     s_filter = st.session_state.get("dash_sponsor", "")
@@ -300,7 +299,7 @@ if page == "Chat Assistant":
 if page == "Analytics Dashboard":
     st.header("📊 Global Analytics")
     st.write(
-        "Analyze trends across the entire clinical trial dataset (60,000+ studies)."
+        "Analyze trends across the entire clinical trial dataset."
     )
 
     col1, col2 = st.columns([1, 3])
@@ -508,8 +507,7 @@ if page == "Raw Data":
     st.header("📂 Raw Data Explorer")
     st.write("View and filter the underlying dataset.")
 
-    # Load a sample or full dataset? Full might be slow.
-    # We load a sample (top 100) to avoid performance issues.
+    # Load a sample (top 100) to avoid performance issues.
     col_raw_1, col_raw_2 = st.columns([1, 1])
 
     with col_raw_1:

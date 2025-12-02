@@ -87,6 +87,7 @@ The agent is equipped with specialized tools to handle different types of reques
 
 ## ⚙️ How It Works (RAG Pipeline)
 
+### 🏗️ Ingestion Pipeline
 1.  **Ingestion**: `ingest_ct.py` fetches study data from ClinicalTrials.gov. It extracts rich text (including **Eligibility Criteria** and **Interventions**) and structured metadata. It uses **multiprocessing** for speed.
 2.  **Embedding**: Text is converted into vector embeddings using `PubMedBERT` and stored in **LanceDB**.
 3.  **Retrieval**:
@@ -94,10 +95,23 @@ The agent is equipped with specialized tools to handle different types of reques
     *   **Pre-Filtering**: Strict filters (Status, Year, Sponsor) reduce the search scope.
     *   **Hybrid Search**: Parallel **Vector Search** (Semantic) and **BM25** (Keyword) combined via **LanceDB Native Hybrid Search**.
     *   **Post-Filtering**: Additional metadata checks (Phase, Intervention) on retrieved candidates.
-    *   **Re-Ranking**: Cross-Encoder re-scoring.
+    *   **Re-Ranking**: Cross-Encoder re-scoring (Cached for performance).
 4.  **Synthesis**: **Google Gemini** synthesizes the final answer.
 
-### 🏗️ Ingestion Pipeline
+## 🐳 Docker Deployment Structure
+
+The application is containerized for easy deployment to Hugging Face Spaces or any Docker-compatible environment.
+
+### Dockerfile Breakdown
+*   **Base Image**: `python:3.10-slim` (Lightweight and secure).
+*   **Dependencies**: Installs system tools (`build-essential`, `git`) and Python packages from `requirements.txt`.
+*   **Port**: Exposes port `8501` for Streamlit.
+*   **Entrypoint**: Runs `streamlit run ct_agent_app.py`.
+
+### Recent Updates 🚀
+*   **RAG Optimization**: Implemented a **Cached Reranker** and reduced retrieval candidates (`TOP_K=200`) for 2-3x faster search performance.
+*   **Enhanced Analytics**: Added support for grouping by **Country** and **State** in the Analytics Engine.
+*   **Dynamic Configuration**: Improved API key handling for secure, multi-user sessions.
 
 ```mermaid
 graph TD
