@@ -11,7 +11,7 @@ pinned: false
 
 # Clinical Trial Inspector Agent 🕵️‍♂️💊
 Access the live app deployment here --> [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/gkip/clinical_trial_inspector)
-You need to sign up for a free Gemini API key here https://lnkd.in/ew3rpKyJ to use the app which will prompt you to paste it in.
+You need to sign up for a free Gemini API key at this link --> https://aistudio.google.com/app/api-keys to use the app which will prompt you to paste it in.
 
 **Clinical Trial Inspector** is an advanced AI agent designed to revolutionize how researchers, clinicians, and analysts explore clinical trial data. By combining **Semantic Search**, **Retrieval-Augmented Generation (RAG)**, and **Visual Analytics**, it transforms raw data from [ClinicalTrials.gov](https://clinicaltrials.gov/) into actionable insights.
 
